@@ -1,0 +1,30 @@
+{
+  "theme_name": "Dark Neutral",
+  "ttk_theme": "clam",
+  "palette": {
+    "bg": "#2b2b2b",
+    "surface": "#3c3f41",
+    "surface_hi": "#4a4d4f",
+    "surface_press": "#585b5d",
+    "field": "#232323",
+    "fg": "#d0d0d0",
+    "fg_disabled": "#808080",
+    "border": "#555555",
+    "select_bg": "#4b6eaf",
+    "select_fg": "#ffffff",
+    "thumb": "#5a5a5a"
+  },
+  "viewer": {
+    "canvas_bg": "#1c1c1c",
+    "info_text": "#d0d0d0",
+    "error_text": "#e06c6c"
+  },
+  "tab": {
+    "selected_bg": "",
+    "selected_fg": "",
+    "accent": "",
+    "idle_fg": "",
+    "pad_x": "2",
+    "pad_y": "2"
+  }
+}

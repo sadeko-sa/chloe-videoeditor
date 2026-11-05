@@ -1,0 +1,2 @@
+# Optional, for dragging files into the window:
+tkinterdnd2

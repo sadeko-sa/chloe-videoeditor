@@ -1,0 +1,30 @@
+{
+  "theme_name": "Dark Dracula",
+  "ttk_theme": "clam",
+  "palette": {
+    "bg": "#282a36",
+    "surface": "#343746",
+    "surface_hi": "#44475a",
+    "surface_press": "#565a73",
+    "field": "#21222c",
+    "fg": "#f8f8f2",
+    "fg_disabled": "#6272a4",
+    "border": "#44475a",
+    "select_bg": "#44475a",
+    "select_fg": "#f8f8f2",
+    "thumb": "#6272a4"
+  },
+  "viewer": {
+    "canvas_bg": "#191a21",
+    "info_text": "#f8f8f2",
+    "error_text": "#ff5555"
+  },
+  "tab": {
+    "selected_bg": "",
+    "selected_fg": "",
+    "accent": "#7f62bd",
+    "idle_fg": "",
+    "pad_x": "2",
+    "pad_y": "2"
+  }
+}

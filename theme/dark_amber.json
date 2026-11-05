@@ -1,0 +1,30 @@
+{
+  "theme_name": "Dark Amber",
+  "ttk_theme": "clam",
+  "palette": {
+    "bg": "#1a1510",
+    "surface": "#2a2218",
+    "surface_hi": "#3a2f20",
+    "surface_press": "#4a3b28",
+    "field": "#120e0a",
+    "fg": "#d9b06d",
+    "fg_disabled": "#7a6240",
+    "border": "#4d3d26",
+    "select_bg": "#b36b00",
+    "select_fg": "#1a1510",
+    "thumb": "#5a4529"
+  },
+  "viewer": {
+    "canvas_bg": "#0d0a06",
+    "info_text": "#d9b06d",
+    "error_text": "#ff6b4a"
+  },
+  "tab": {
+    "selected_bg": "",
+    "selected_fg": "",
+    "accent": "",
+    "idle_fg": "",
+    "pad_x": "2",
+    "pad_y": "2"
+  }
+}

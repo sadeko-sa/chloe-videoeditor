@@ -1,0 +1,30 @@
+{
+  "theme_name": "Light OS",
+  "ttk_theme": "",
+  "palette": {
+    "bg": "",
+    "surface": "",
+    "surface_hi": "",
+    "surface_press": "",
+    "field": "",
+    "fg": "",
+    "fg_disabled": "",
+    "border": "",
+    "select_bg": "",
+    "select_fg": "",
+    "thumb": ""
+  },
+  "viewer": {
+    "canvas_bg": "#d9d9d9",
+    "info_text": "#1a1a1a",
+    "error_text": "#b3261e"
+  },
+  "tab": {
+    "selected_bg": "",
+    "selected_fg": "",
+    "accent": "",
+    "idle_fg": "",
+    "pad_x": "2",
+    "pad_y": "2"
+  }
+}

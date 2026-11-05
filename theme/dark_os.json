@@ -1,0 +1,30 @@
+{
+  "theme_name": "Dark OS",
+  "ttk_theme": "",
+  "palette": {
+    "bg": "",
+    "surface": "",
+    "surface_hi": "",
+    "surface_press": "",
+    "field": "",
+    "fg": "",
+    "fg_disabled": "",
+    "border": "",
+    "select_bg": "",
+    "select_fg": "",
+    "thumb": ""
+  },
+  "viewer": {
+    "canvas_bg": "#101010",
+    "info_text": "#e6e6e6",
+    "error_text": "#ff7b72"
+  },
+  "tab": {
+    "selected_bg": "",
+    "selected_fg": "",
+    "accent": "#c17400",
+    "idle_fg": "",
+    "pad_x": "2",
+    "pad_y": "2"
+  }
+}

@@ -1,0 +1,304 @@
+"""ui/dialogs.py - Settings, project settings and export dialogs."""
+
+import os
+import queue
+import sys
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
+
+from chloe_lang import list_languages, resolve_language, t
+from chloe_theme import ThemeDialog, list_themes, resolve_theme
+
+from engine import APP_NAME, VERSION
+from engine import effect as fx
+from engine import ffmpeg as ff
+from engine.compiler import CompileError, compile_export
+from engine.config import PREVIEW_RANGE, config_path
+from engine.project import even
+from ui.common import Dialog, fmt_number, ok_cancel
+
+
+def _int(text, lo, hi, default):
+    try:
+        return max(lo, min(hi, int(float(text))))
+    except (TypeError, ValueError):
+        return default
+
+
+class SettingsDialog(Dialog):
+    """Settings with the tabs General, Appearance and About. OK saves the config, Cancel drops the changes."""
+
+    def __init__(self, app):
+        """@param app  the App that opened it"""
+        super().__init__(app.root, "dlg.settings")
+        self.app, cfg = app, app.cfg
+        frm = ttk.Frame(self, padding=10)
+        frm.pack(fill="both", expand=True)
+        ok_cancel(frm, self._ok, self.destroy).pack(side="bottom", fill="x", pady=(10, 0))
+        self.nb = ttk.Notebook(frm)
+        self.nb.pack(fill="both", expand=True)
+        self._tab_general(cfg)
+        self._tab_appearance(cfg)
+        self._tab_about()
+        self.show()
+
+    def _page(self, key):
+        page = ttk.Frame(self.nb, padding=14)
+        self.nb.add(page, text=t(key))
+        return page
+
+    def _tab_general(self, cfg):
+        page = self._page("tab.general")
+        page.columnconfigure(1, weight=1)
+        ttk.Label(page, text=t("field.ffmpeg")).grid(row=0, column=0, sticky="w", pady=4)
+        self.ffmpeg_var = tk.StringVar(value=cfg["ffmpeg"])
+        ttk.Entry(page, textvariable=self.ffmpeg_var, width=40).grid(row=0, column=1, sticky="we", padx=(12, 4))
+        ttk.Button(page, text=t("btn.pick"), command=self._pick_ffmpeg).grid(row=0, column=2)
+        ttk.Label(page, text=t("hint.ffmpeg"), wraplength=420, justify="left").grid(
+            row=1, column=1, columnspan=2, sticky="w", padx=(12, 0))
+        ttk.Label(page, text=t("field.preview_max")).grid(row=2, column=0, sticky="w", pady=(14, 4))
+        self.preview_var = tk.StringVar(value=str(cfg["preview_max"]))
+        ttk.Spinbox(page, textvariable=self.preview_var, from_=PREVIEW_RANGE[0], to=PREVIEW_RANGE[1],
+                    increment=160, width=8).grid(row=2, column=1, sticky="w", padx=(12, 0), pady=(14, 4))
+
+    def _pick_ffmpeg(self):
+        path = filedialog.askopenfilename(parent=self, title=t("dlg.pick_ffmpeg"))
+        if path:
+            self.ffmpeg_var.set(path)
+
+    def _tab_appearance(self, cfg):
+        page = self._page("tab.appearance")
+        page.columnconfigure(1, weight=1)
+        self.langs = list_languages()
+        self.lang_var, self.theme_var = tk.StringVar(), tk.StringVar()
+        ttk.Label(page, text=t("field.language")).grid(row=0, column=0, sticky="w", pady=6)
+        self.lang_box = ttk.Combobox(page, textvariable=self.lang_var, state="readonly", width=30,
+                                     values=[n for _c, n in self.langs])
+        self.lang_box.grid(row=0, column=1, sticky="w", padx=(12, 0))
+        names = dict(self.langs)
+        self.lang_var.set(names.get(cfg["language"], names.get("en", cfg["language"])))
+        ttk.Label(page, text=t("field.theme")).grid(row=1, column=0, sticky="w", pady=6)
+        self.theme_box = ttk.Combobox(page, textvariable=self.theme_var, state="readonly", width=30)
+        self.theme_box.grid(row=1, column=1, sticky="w", padx=(12, 0))
+        ttk.Button(page, text=t("btn.theme_edit"), command=self._edit_theme).grid(
+            row=2, column=1, sticky="w", padx=(12, 0), pady=(8, 0))
+        self._show_themes(cfg["theme"])
+
+    def _show_themes(self, code):
+        """Fill the theme box and select the theme with this code."""
+        self.themes = list_themes()
+        self.theme_box.configure(values=[n for _c, n in self.themes])
+        self.theme_var.set(dict(self.themes).get(code, code))
+
+    @staticmethod
+    def _picked(box, items, default):
+        """@return the code chosen in a combobox, or `default` if nothing matches"""
+        i = box.current()
+        return items[i][0] if 0 <= i < len(items) else default
+
+    def _edit_theme(self):
+        code = self._picked(self.theme_box, self.themes, self.app.cfg["theme"])
+        dlg = ThemeDialog(self, code)
+        if dlg.result:
+            self._show_themes(dlg.result)
+
+    def _tab_about(self):
+        page = self._page("tab.about")
+        ttk.Label(page, text="%s %s" % (APP_NAME, VERSION), font=("TkDefaultFont", 14, "bold")).pack(anchor="w")
+        ttk.Label(page, text=t("about.description"), wraplength=400, justify="left").pack(anchor="w", pady=(4, 12))
+        tools = self.app.tools
+        rows = [(t("about.python"), sys.version.split()[0]), (t("about.tk"), str(tk.TkVersion)),
+                (t("about.dnd"), t("about.dnd_on") if self.app.dnd_ok else t("about.dnd_off")),
+                (t("about.ffmpeg"), "%s (%s)" % (tools.version, tools.ffmpeg) if tools else t("about.missing")),
+                (t("about.effects"), str(len(fx.all_effects()))),
+                (t("about.config"), config_path())]
+        errors = fx.load_errors()
+        if errors:
+            rows.append((t("about.plugin_errors"), "\n".join(errors)))
+        grid = ttk.Frame(page)
+        grid.pack(anchor="w")
+        for row, (name, value) in enumerate(rows):
+            ttk.Label(grid, text=name).grid(row=row, column=0, sticky="nw", pady=2)
+            ttk.Label(grid, text=value, wraplength=320, justify="left").grid(
+                row=row, column=1, sticky="w", padx=(12, 0), pady=2)
+
+    def _ok(self):
+        """Copy everything into the config, save, apply what works at once, close."""
+        app, cfg = self.app, self.app.cfg
+        old = (cfg["language"], cfg["theme"], cfg["ffmpeg"])
+        cfg["ffmpeg"] = self.ffmpeg_var.get().strip()
+        cfg["preview_max"] = _int(self.preview_var.get(), PREVIEW_RANGE[0], PREVIEW_RANGE[1], cfg["preview_max"])
+        cfg["language"] = resolve_language(self._picked(self.lang_box, self.langs, cfg["language"]))
+        cfg["theme"] = resolve_theme(self._picked(self.theme_box, self.themes, cfg["theme"]))
+        app.save_config()
+        app.apply_settings(ffmpeg_changed=old[2] != cfg["ffmpeg"])
+        self.destroy()
+        if old[:2] != (cfg["language"], cfg["theme"]):
+            messagebox.showinfo(t("dlg.restart"), t("msg.restart"), parent=app.root)
+
+
+class ProjectDialog(Dialog):
+    """Frame size and frame rate of the project."""
+
+    def __init__(self, app):
+        super().__init__(app.root, "dlg.project")
+        project = app.project
+        frm = ttk.Frame(self, padding=14)
+        frm.pack(fill="both", expand=True)
+        self.vars = {"width": tk.StringVar(value=str(project.width)),
+                     "height": tk.StringVar(value=str(project.height)),
+                     "fps": tk.StringVar(value=fmt_number(project.fps, 3))}
+        spins = {}
+        for row, (key, lo, hi, step) in enumerate((("width", 16, 16384, 2), ("height", 16, 16384, 2),
+                                                   ("fps", 1, 120, 1))):
+            ttk.Label(frm, text=t("field." + key)).grid(row=row, column=0, sticky="w", pady=4)
+            spins[key] = ttk.Spinbox(frm, textvariable=self.vars[key], from_=lo, to=hi, increment=step, width=10)
+            spins[key].grid(row=row, column=1, padx=(12, 0))
+        ttk.Label(frm, text=t("hint.project"), wraplength=280, justify="left").grid(
+            row=3, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        ok_cancel(frm, self._ok, self.destroy).grid(row=4, column=0, columnspan=2, sticky="we", pady=(12, 0))
+        self.show(spins["width"], self._ok)
+
+    def _ok(self):
+        try:
+            fps = max(1.0, min(120.0, float(self.vars["fps"].get().replace(",", "."))))
+        except ValueError:
+            fps = None
+        self.result = (even(_int(self.vars["width"].get(), 16, 16384, 1280)),
+                       even(_int(self.vars["height"].get(), 16, 16384, 720)), fps)
+        self.destroy()
+
+
+class ExportDialog(Dialog):
+    """Pick format, quality and file, then render the whole project with progress and Cancel."""
+
+    def __init__(self, app):
+        super().__init__(app.root, "dlg.export")
+        self.app = app
+        self.presets = ff.available_presets(app.tools)
+        self.export = None
+        self.events = queue.Queue()
+        cfg = app.cfg
+        frm = ttk.Frame(self, padding=14)
+        frm.pack(fill="both", expand=True)
+        frm.columnconfigure(1, weight=1)
+        codes = list(self.presets)
+        self.format_var, self.quality_var, self.path_var = tk.StringVar(), tk.StringVar(), tk.StringVar()
+        ttk.Label(frm, text=t("field.format")).grid(row=0, column=0, sticky="w", pady=4)
+        self.format_box = ttk.Combobox(frm, textvariable=self.format_var, state="readonly",
+                                       values=[self.presets[c].label for c in codes], width=24)
+        self.format_box.grid(row=0, column=1, sticky="w", padx=(12, 0))
+        self.format_box.current(codes.index(cfg["export_format"]) if cfg["export_format"] in codes else 0)
+        self.format_box.bind("<<ComboboxSelected>>", self._format_changed)
+        ttk.Label(frm, text=t("field.quality")).grid(row=1, column=0, sticky="w", pady=4)
+        self.quality_box = ttk.Combobox(frm, textvariable=self.quality_var, state="readonly", width=24,
+                                        values=[t("quality." + q) for q in ff.QUALITIES])
+        self.quality_box.grid(row=1, column=1, sticky="w", padx=(12, 0))
+        self.quality_box.current(ff.QUALITIES.index(cfg["export_quality"]))
+        ttk.Label(frm, text=t("field.output")).grid(row=2, column=0, sticky="w", pady=4)
+        self.path_entry = ttk.Entry(frm, textvariable=self.path_var, width=44)
+        self.path_entry.grid(row=2, column=1, sticky="we", padx=(12, 4))
+        self.pick_btn = ttk.Button(frm, text=t("btn.pick"), command=self._pick)
+        self.pick_btn.grid(row=2, column=2)
+        project = app.project
+        ttk.Label(frm, text=t("export.info", width=project.width, height=project.height,
+                              fps=fmt_number(project.fps, 3), seconds=fmt_number(project.duration(), 2))).grid(
+            row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        self.bar = ttk.Progressbar(frm, maximum=1000)
+        self.bar.grid(row=4, column=0, columnspan=3, sticky="we", pady=(14, 0))
+        self.status = ttk.Label(frm, text="")
+        self.status.grid(row=5, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        self.buttons = ok_cancel(frm, self._start, self._cancel, "btn.export")
+        self.buttons.grid(row=6, column=0, columnspan=3, sticky="we", pady=(12, 0))
+        self.protocol("WM_DELETE_WINDOW", self._cancel)
+        self._format_changed()
+        self.show(self.path_entry)
+
+    def _preset_code(self):
+        i = self.format_box.current()
+        return list(self.presets)[max(i, 0)]
+
+    def _format_changed(self, _event=None):
+        """Keep the file extension in step with the format."""
+        path = self.path_var.get()
+        ext = self.presets[self._preset_code()].ext
+        if not path:
+            base = os.path.splitext(os.path.basename(self.app.project_path or ""))[0] or "video"
+            folder = self.app.cfg["last_dir"] or os.path.expanduser("~")
+            path = os.path.join(folder, base + ext)
+        self.path_var.set(os.path.splitext(path)[0] + ext)
+
+    def _pick(self):
+        preset = self.presets[self._preset_code()]
+        path = filedialog.asksaveasfilename(parent=self, title=t("dlg.export"), defaultextension=preset.ext,
+                                            initialfile=os.path.basename(self.path_var.get()),
+                                            initialdir=os.path.dirname(self.path_var.get()) or None,
+                                            filetypes=[(preset.label, "*" + preset.ext)])
+        if path:
+            self.path_var.set(path)
+
+    def _lock(self, locked):
+        state = "disabled" if locked else "normal"
+        for widget in (self.path_entry, self.pick_btn):
+            widget.configure(state=state)
+        for box in (self.format_box, self.quality_box):
+            box.configure(state="disabled" if locked else "readonly")
+
+    def _start(self):
+        app, path = self.app, self.path_var.get().strip()
+        if not path:
+            messagebox.showerror(t("dlg.error"), t("msg.output_required"), parent=self)
+            return
+        if os.path.exists(path) and not messagebox.askyesno(t("dlg.export"), t("msg.overwrite", name=os.path.basename(path)),
+                                                            parent=self):
+            return
+        try:
+            job = compile_export(app.project)
+        except CompileError as exc:
+            messagebox.showerror(t("dlg.error"), str(exc), parent=self)
+            return
+        code, quality = self._preset_code(), ff.QUALITIES[max(self.quality_box.current(), 0)]
+        app.cfg.update(export_format=code, export_quality=quality, last_dir=os.path.dirname(path))
+        app.save_config()
+        self._lock(True)
+        self.status.configure(text=t("export.running"))
+        for child in self.buttons.winfo_children():
+            child.destroy()
+        ttk.Button(self.buttons, text=t("btn.cancel"), command=self._cancel).pack(side="right")
+        self.export = ff.Export(app.tools, job, self.presets[code], quality, path,
+                                lambda f: self.events.put(("progress", f)),
+                                lambda err, cancelled: self.events.put(("done", (err, cancelled))))
+        self.export.start()
+        self._poll()
+
+    def _poll(self):
+        """Take progress messages from the export thread (Tk is not thread safe)."""
+        finished = None
+        try:
+            while True:
+                kind, value = self.events.get_nowait()
+                if kind == "progress":
+                    self.bar.configure(value=int(value * 1000))
+                    self.status.configure(text=t("export.progress", percent=int(value * 100)))
+                else:
+                    finished = value
+        except queue.Empty:
+            pass
+        if finished is None:
+            self.after(100, self._poll)
+            return
+        err, cancelled = finished
+        self.export = None
+        if err:
+            messagebox.showerror(t("dlg.error"), t("msg.export_failed", error=err), parent=self)
+        elif not cancelled:
+            messagebox.showinfo(t("dlg.export"), t("msg.export_done", path=self.path_var.get()), parent=self)
+        self.destroy()
+
+    def _cancel(self):
+        """Cancel a running export, or just close."""
+        if self.export:
+            self.export.cancel()
+            self.status.configure(text=t("export.cancelling"))
+        else:
+            self.destroy()
