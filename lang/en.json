@@ -169,7 +169,6 @@
   "effect.sharpen.amount": "Amount",
   "effect.grain.amount": "Amount",
   "effect.vignette.amount": "Amount",
-  "effect.exposure.stops": "Stops (EV)",
   "effect.white_balance.temperature": "Temperature (cool - warm)",
   "effect.white_balance.tint": "Tint (green - magenta)",
   "effect.hue.degrees": "Rotate (degrees)",
@@ -184,5 +183,15 @@
   "about.dnd_off": "off (pip install tkinterdnd2)",
   "btn.compare": "Original (hold)",
   "tip.compare": "Hold to see the picture without effects",
-  "status.original": "Original (no effects)"
+  "status.original": "Original (no effects)",
+  "effect.black_level": "Black level",
+  "effect.white_level": "White level",
+  "effect.black_level.amount": "Amount",
+  "effect.white_level.amount": "Amount",
+  "effect.exposure.amount": "Amount",
+  "effect.vignette.feather": "Feather",
+  "effect.vignette.highlights": "Highlights",
+  "effect.vignette.size": "Size",
+  "effect.vignette.roundness": "Roundness",
+  "effect.vignette.exposure": "Exposure"
 }

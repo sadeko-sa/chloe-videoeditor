@@ -169,7 +169,6 @@
   "effect.sharpen.amount": "量",
   "effect.grain.amount": "量",
   "effect.vignette.amount": "量",
-  "effect.exposure.stops": "段数 (EV)",
   "effect.white_balance.temperature": "色温度 (寒色 - 暖色)",
   "effect.white_balance.tint": "色合い (緑 - マゼンタ)",
   "effect.hue.degrees": "回転 (度)",
@@ -184,5 +183,15 @@
   "about.dnd_off": "無効 (pip install tkinterdnd2)",
   "btn.compare": "元の映像 (長押し)",
   "tip.compare": "押している間、エフェクトなしの映像を表示",
-  "status.original": "元の映像 (エフェクトなし)"
+  "status.original": "元の映像 (エフェクトなし)",
+  "effect.black_level": "黒レベル",
+  "effect.white_level": "白レベル",
+  "effect.black_level.amount": "量",
+  "effect.white_level.amount": "量",
+  "effect.exposure.amount": "量",
+  "effect.vignette.feather": "ぼかし",
+  "effect.vignette.highlights": "ハイライト",
+  "effect.vignette.size": "サイズ",
+  "effect.vignette.roundness": "丸み",
+  "effect.vignette.exposure": "露出"
 }
