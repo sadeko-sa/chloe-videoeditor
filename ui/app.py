@@ -7,18 +7,18 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from chloe_lang import set_language, t
+from chloe_lang import list_languages, resolve_language, set_language, t
 from chloe_theme import apply_theme, resolve_color, set_theme
 
 from engine import APP_NAME, VERSION
 from engine import ffmpeg as ff
 from engine.compiler import CompileError
-from engine.config import save_config
+from engine.config import push_recent, save_config
 from engine.preview import PreviewEngine, save_frame
 from engine.project import (PROJECT_EXT, AdjustmentLayer, EffectInstance, History, Project, ProjectError, even,
                             load_project, save_project)
 from ui.common import IS_WIN, Tip, fmt_time
-from ui.dialogs import ExportDialog, ProjectDialog, SettingsDialog
+from ui.dialogs import AboutDialog, ExportDialog, ProjectDialog, SettingsDialog
 from ui.panels import EffectPanel, LayerPanel, PropertiesPanel
 
 try:                                            # optional: pip install tkinterdnd2
@@ -51,7 +51,7 @@ class App:
         self.inbox = queue.Queue()                  # functions from worker threads, run in the Tk thread
         self.tools = ff.locate(cfg["ffmpeg"])
         self.engine = PreviewEngine(self.tools, lambda seq, path, err: self.inbox.put(
-            lambda: self._on_result(seq, path, err)))
+            lambda: self._on_result(seq, path, err)), cfg["cache_dir"])
         self._build()
         self.update_title()
         self.root.after(40, self._poll)
@@ -172,6 +172,8 @@ class App:
         file_menu = tk.Menu(bar, tearoff=0)
         add(file_menu, "menu.new", self.new_project, "n")
         add(file_menu, "menu.open", self.open_dialog, "o")
+        self.recent_menu = tk.Menu(file_menu, tearoff=0)            # "Open recent" submenu, filled by _fill_recent()
+        file_menu.add_cascade(label=t("menu.recent"), menu=self.recent_menu)
         add(file_menu, "menu.save", self.save, "s")
         add(file_menu, "menu.save_as", self.save_as, "s", True)
         file_menu.add_separator()
@@ -192,7 +194,33 @@ class App:
         add(edit, "menu.duplicate", self.duplicate_layer, "d")
         bar.add_cascade(label=t("menu.file"), menu=file_menu)
         bar.add_cascade(label=t("menu.edit"), menu=edit)
+        # root menu "Language": one radio entry per language ("<English name> - <native name>")
+        lang_menu = tk.Menu(bar, tearoff=0)
+        self.lang_var = tk.StringVar(master=root, value=self.cfg["language"])
+        for code, name in list_languages():
+            lang_menu.add_radiobutton(label=name, variable=self.lang_var, value=code,
+                                      command=lambda c=code: self.choose_language(c))
+        bar.add_cascade(label=t("menu.language"), menu=lang_menu)
+        # root menu "Help" comes after "Language" (the last one in the bar); it holds the About entry
+        help_menu = tk.Menu(bar, tearoff=0)
+        help_menu.add_command(label=t("menu.about_item"), command=lambda: AboutDialog(self))
+        bar.add_cascade(label=t("menu.help"), menu=help_menu)
         root.config(menu=bar)
+        self._fill_recent()
+
+    def choose_language(self, code):
+        """
+        Language menu: save the chosen language in the config. It is used from the next start, because all
+        texts are put into the windows when the program starts.
+
+        @param code  language code of the chosen entry, e.g. "ja"
+        """
+        code = resolve_language(code)
+        if code == self.cfg["language"]:
+            return
+        self.cfg["language"] = code
+        self.save_config()
+        messagebox.showinfo(t("dlg.restart"), t("msg.restart"), parent=self.root)
 
     @staticmethod
     def _key(command):
@@ -214,8 +242,15 @@ class App:
         except OSError as exc:
             messagebox.showerror(t("dlg.error"), t("msg.save_failed", error=exc), parent=self.root)
 
-    def apply_settings(self, ffmpeg_changed):
-        """Use settings that work without a restart."""
+    def apply_settings(self, ffmpeg_changed, cache_changed=False):
+        """
+        Use settings that work without a restart.
+
+        @param ffmpeg_changed  True if the FFmpeg location was changed (it is searched again)
+        @param cache_changed   True if the cache folder was changed (the preview cache moves there)
+        """
+        if cache_changed:
+            self.engine.set_cache_dir(self.cfg["cache_dir"])
         if ffmpeg_changed:
             self.tools = ff.locate(self.cfg["ffmpeg"])
             self.engine.tools = self.tools
@@ -591,8 +626,57 @@ class App:
                                      parent=self.root)
                 return
             self.cfg["last_dir"] = os.path.dirname(path)
+            self.add_recent(path)
         else:
             self.add_media([path])
+
+    # ------------------------------------------------------------------ #
+    # Recent projects
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _recent_label(index, path):
+        """@return menu text of a recent project: its number, the file name and the (shortened) folder"""
+        folder = os.path.dirname(path)
+        if len(folder) > 48:
+            folder = "..." + folder[-45:]
+        return "%d. %s   (%s)" % (index + 1, os.path.basename(path), folder)
+
+    def _fill_recent(self):
+        """Rebuild the File > Open recent submenu from the config list (newest first)."""
+        menu, recent = self.recent_menu, self.cfg["recent"]
+        menu.delete(0, "end")
+        if not recent:
+            menu.add_command(label=t("menu.recent_empty"), state="disabled")
+            return
+        for i, path in enumerate(recent):
+            menu.add_command(label=self._recent_label(i, path), command=lambda p=path: self.open_recent(p))
+        menu.add_separator()
+        menu.add_command(label=t("menu.recent_clear"), command=self.clear_recent)
+
+    def add_recent(self, path):
+        """Put a project file first in the recent list, update the menu and save the config at once."""
+        self.cfg["recent"] = push_recent(self.cfg["recent"], path)
+        self._fill_recent()
+        try:
+            save_config(self.cfg)               # at once so a crash does not lose the list; errors show on quit
+        except OSError:
+            pass
+
+    def open_recent(self, path):
+        """Open a project of the recent list (after asking about unsaved changes); a missing file is dropped."""
+        if not os.path.isfile(path):
+            self.cfg["recent"] = [p for p in self.cfg["recent"] if p != path]
+            self._fill_recent()
+            messagebox.showerror(t("dlg.error"), t("msg.recent_missing", name=os.path.basename(path)),
+                                 parent=self.root)
+        elif self.confirm_discard():
+            self.open_path(path)
+
+    def clear_recent(self):
+        """Empty the recent list (File > Open recent > Clear list)."""
+        self.cfg["recent"] = []
+        self._fill_recent()
 
     def save(self):
         """@return True if saved"""
@@ -612,6 +696,7 @@ class App:
             return False
         self.project_path, self.saved_state = path, self.history.current
         self.cfg["last_dir"] = os.path.dirname(path)
+        self.add_recent(path)
         self.update_title()
         return True
 

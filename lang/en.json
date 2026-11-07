@@ -218,5 +218,18 @@
   "effect.hsl.blue_lum": "Blue brightness",
   "effect.hsl.aqua_hue": "Aqua hue",
   "effect.hsl.aqua_sat": "Aqua saturation",
-  "effect.hsl.aqua_lum": "Aqua brightness"
+  "effect.hsl.aqua_lum": "Aqua brightness",
+  "menu.recent": "Open recent",
+  "menu.recent_empty": "(empty)",
+  "menu.recent_clear": "Clear list",
+  "msg.recent_missing": "{name} does not exist any more. It was removed from the recent list.",
+  "field.cache_dir": "Cache folder",
+  "hint.cache_dir": "Temp cache folder. Leave empty to use app root.",
+  "dlg.pick_cache": "Select cache folder",
+  "about.cache": "Cache folder",
+  "menu.language": "Language",
+  "tab.language": "Language",
+  "menu.help": "Help",
+  "menu.about_item": "About",
+  "dlg.about": "About"
 }

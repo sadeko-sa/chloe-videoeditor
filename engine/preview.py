@@ -31,28 +31,61 @@ CACHE_ENTRIES = 80
 """Pictures kept in the cache (each is one PNG of preview size)."""
 
 
-def _make_folder() -> str:
+RUN_MARK = ".chloe_run"
+"""Empty file inside every run_ folder made by this program. In a folder the user picked, only run_ folders
+with this mark are removed as leftovers, so nothing else that lives there is ever touched."""
+
+
+def default_root() -> str:
+    """@return the cache folder next to the program (used when the user picked none, or the picked one fails)"""
+    return os.path.join(APP_DIR, "cache")
+
+
+def cache_root(root_dir: str = "") -> str:
     """
-    @return a new empty cache folder inside the program folder (cache/), after removing the leftovers of
-            crashed runs; the system temp folder (AppData on Windows) is only the fallback
+    @param root_dir  folder picked by the user ("~" allowed); empty = the default
+    @return          absolute path of the folder in which the run_ folders are made
     """
-    root = os.path.join(APP_DIR, "cache")
-    try:
-        os.makedirs(root, exist_ok=True)
-        for name in os.listdir(root):
-            if name.startswith("run_"):
-                shutil.rmtree(os.path.join(root, name), ignore_errors=True)
-        return tempfile.mkdtemp(prefix="run_", dir=root)
-    except OSError:
-        return tempfile.mkdtemp(prefix="chloe_preview_")
+    return os.path.abspath(os.path.expanduser(root_dir)) if root_dir else default_root()
+
+
+def _make_folder(root_dir: str = "") -> str:
+    """
+    @param root_dir  folder picked by the user to hold the cache; empty = cache/ in the program folder
+    @return a new empty cache folder (run_...) inside that folder, after removing the leftovers of crashed
+            runs; if the picked folder cannot be used the program folder (cache/) is tried, and the system
+            temp folder (AppData on Windows) is only the last fallback
+    """
+    roots = [cache_root(root_dir)]
+    if roots[0] != default_root():
+        roots.append(default_root())
+    for root in roots:
+        try:
+            os.makedirs(root, exist_ok=True)
+            for name in os.listdir(root):
+                old = os.path.join(root, name)
+                # the program's own folder only holds our run_ folders; elsewhere only marked ones are ours
+                if name.startswith("run_") and (root == default_root() or os.path.exists(os.path.join(old, RUN_MARK))):
+                    shutil.rmtree(old, ignore_errors=True)
+            folder = tempfile.mkdtemp(prefix="run_", dir=root)
+            with open(os.path.join(folder, RUN_MARK), "w"):
+                pass                                                # empty file, only its name matters
+            return folder
+        except OSError:
+            continue                                                # next root (the program folder)
+    return tempfile.mkdtemp(prefix="chloe_preview_")
 
 
 class FrameCache:
     """PNG files in a temporary folder, oldest removed first."""
 
-    def __init__(self, limit: int = CACHE_ENTRIES):
+    def __init__(self, limit: int = CACHE_ENTRIES, root: str = ""):
+        """
+        @param limit  most pictures kept
+        @param root   folder picked by the user to hold the cache; empty = cache/ in the program folder
+        """
         self.limit = limit
-        self.folder = _make_folder()
+        self.folder = _make_folder(root)
         self._items: "OrderedDict[str, str]" = OrderedDict()
 
     def path(self, key: str) -> str:
@@ -110,16 +143,24 @@ class PreviewEngine:
     """
     Worker for preview requests.
 
-        engine = PreviewEngine(tools, deliver)       # deliver(seq, png path or None, error or None)
+        engine = PreviewEngine(tools, deliver, cache_dir)   # deliver(seq, png path or None, error or None)
         seq = engine.request(project, t, (w, h), focus_layer_id)
+        engine.set_cache_dir(other_folder)                  # the cache moves, no restart needed
         engine.close()
 
     `deliver` runs in the worker thread, and is skipped for a request that a newer one replaced.
     """
 
-    def __init__(self, tools: Optional[Tools], deliver: Callable[[int, Optional[str], Optional[str]], None]):
+    def __init__(self, tools: Optional[Tools], deliver: Callable[[int, Optional[str], Optional[str]], None],
+                 cache_dir: str = ""):
+        """
+        @param tools      the FFmpeg programs, None if not found
+        @param deliver    called in the worker thread with the answer of a request
+        @param cache_dir  folder picked by the user to hold the cache; empty = cache/ in the program folder
+        """
         self.tools, self.deliver = tools, deliver
-        self.cache = FrameCache()
+        self.cache_dir = cache_dir                                  # as picked by the user (see set_cache_dir)
+        self.cache = FrameCache(root=cache_dir)
         self._cond = threading.Condition()
         self._pending = None
         self._seq = 0
@@ -148,6 +189,23 @@ class PreviewEngine:
                 self._proc.kill()
             self._cond.notify()
             return self._seq
+
+    def set_cache_dir(self, cache_dir: str) -> bool:
+        """
+        Move the cache to another folder. The pictures cached so far are dropped, the next request renders again.
+
+        @param cache_dir  folder picked by the user; empty = cache/ in the program folder
+        @return           True if the cache was moved, False if that folder is the one in use already
+        """
+        with self._cond:
+            if cache_root(cache_dir) == cache_root(self.cache_dir):
+                return False
+            old, self.cache, self.cache_dir = self.cache, FrameCache(root=cache_dir), cache_dir
+            self._seq += 1                                          # an answer still on its way is outdated
+            if self._proc and self._proc.poll() is None:
+                self._proc.kill()                                   # it writes into the old folder
+        old.close()
+        return True
 
     def close(self) -> None:
         with self._cond:
@@ -186,27 +244,28 @@ class PreviewEngine:
     def _render(self, project: Project, t: float, size: Tuple[int, int], focus_id: Optional[str]) -> str:
         if self.tools is None:
             raise FFmpegError("FFmpeg not found")
+        cache = self.cache                                          # kept: set_cache_dir() may swap self.cache
         stack = active_layers(project, t)
         final_key = frame_key(project, stack, t, size)
-        hit = self.cache.get(final_key)
+        hit = cache.get(final_key)
         if hit:
             return hit
         focus = next((i for i, l in enumerate(stack) if l.id == focus_id), 0)
         layers, base, tap, prefix_key = stack, None, None, None
         if focus > 0:
             prefix_key = frame_key(project, stack[:focus], t, size)
-            base = self.cache.get(prefix_key)
+            base = cache.get(prefix_key)
             if base:
                 layers, prefix_key = stack[focus:], None
             else:
                 tap = focus
         job = compile_frame(project, layers, t, size, base=base, tap=tap)
-        render_frame(self.tools, job, self.cache.path(final_key),
-                     self.cache.path(prefix_key) if prefix_key else None, self._on_start)
-        self.cache.add(final_key)
+        render_frame(self.tools, job, cache.path(final_key),
+                     cache.path(prefix_key) if prefix_key else None, self._on_start)
+        cache.add(final_key)
         if prefix_key:
-            self.cache.add(prefix_key)
-        return self.cache.path(final_key)
+            cache.add(prefix_key)
+        return cache.path(final_key)
 
 
 def save_frame(tools: Tools, project: Project, t: float, path: str) -> None:

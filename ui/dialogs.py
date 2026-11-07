@@ -25,8 +25,52 @@ def _int(text, lo, hi, default):
         return default
 
 
+def build_about(page, app):
+    """
+    Fill a frame with the program name and version, the description and the facts about this installation
+    (Python, Tk, drag and drop, FFmpeg, effects, config file, cache folder, plugin errors).
+
+    @param page  frame to fill (the About tab of Settings, or the body of the About window)
+    @param app   the App (gives the FFmpeg tools, the drag and drop state and the preview cache)
+    """
+    ttk.Label(page, text="%s %s" % (APP_NAME, VERSION), font=("TkDefaultFont", 14, "bold")).pack(anchor="w")
+    ttk.Label(page, text=t("about.description"), wraplength=400, justify="left").pack(anchor="w", pady=(4, 12))
+    tools = app.tools
+    rows = [(t("about.python"), sys.version.split()[0]), (t("about.tk"), str(tk.TkVersion)),
+            (t("about.dnd"), t("about.dnd_on") if app.dnd_ok else t("about.dnd_off")),
+            (t("about.ffmpeg"), "%s (%s)" % (tools.version, tools.ffmpeg) if tools else t("about.missing")),
+            (t("about.effects"), str(len(fx.all_effects()))),
+            (t("about.config"), config_path()),
+            (t("about.cache"), os.path.dirname(app.engine.cache.folder))]
+    errors = fx.load_errors()
+    if errors:
+        rows.append((t("about.plugin_errors"), "\n".join(errors)))
+    grid = ttk.Frame(page)
+    grid.pack(anchor="w")
+    for row, (name, value) in enumerate(rows):
+        ttk.Label(grid, text=name).grid(row=row, column=0, sticky="nw", pady=2)
+        ttk.Label(grid, text=value, wraplength=320, justify="left").grid(
+            row=row, column=1, sticky="w", padx=(12, 0), pady=2)
+
+
+class AboutDialog(Dialog):
+    """The About window of the main menu: the same information as the About tab of Settings, and an OK button."""
+
+    def __init__(self, app):
+        """@param app  the App that opened it"""
+        super().__init__(app.root, "dlg.about")
+        frm = ttk.Frame(self, padding=14)
+        frm.pack(fill="both", expand=True)
+        buttons = ttk.Frame(frm)                                    # packed first so it keeps its place at the bottom
+        buttons.pack(side="bottom", fill="x", pady=(12, 0))
+        ok = ttk.Button(buttons, text=t("btn.ok"), command=self.destroy)
+        ok.pack(side="right")
+        build_about(frm, app)
+        self.show(ok, self.destroy)
+
+
 class SettingsDialog(Dialog):
-    """Settings with the tabs General, Appearance and About. OK saves the config, Cancel drops the changes."""
+    """Settings with the tabs General, Appearance, Language and About. OK saves the config, Cancel drops the changes."""
 
     def __init__(self, app):
         """@param app  the App that opened it"""
@@ -39,10 +83,17 @@ class SettingsDialog(Dialog):
         self.nb.pack(fill="both", expand=True)
         self._tab_general(cfg)
         self._tab_appearance(cfg)
+        self._tab_language(cfg)                                     # next to the last tab (About)
         self._tab_about()
         self.show()
 
     def _page(self, key):
+        """
+        Add a tab.
+
+        @param key  language key of the tab text
+        @return     the empty page (frame) of the tab
+        """
         page = ttk.Frame(self.nb, padding=14)
         self.nb.add(page, text=t(key))
         return page
@@ -60,29 +111,50 @@ class SettingsDialog(Dialog):
         self.preview_var = tk.StringVar(value=str(cfg["preview_max"]))
         ttk.Spinbox(page, textvariable=self.preview_var, from_=PREVIEW_RANGE[0], to=PREVIEW_RANGE[1],
                     increment=160, width=8).grid(row=2, column=1, sticky="w", padx=(12, 0), pady=(14, 4))
+        # preview cache folder: empty = cache/ next to the program, else the folder typed or picked here
+        ttk.Label(page, text=t("field.cache_dir")).grid(row=3, column=0, sticky="w", pady=(14, 4))
+        self.cache_var = tk.StringVar(value=cfg["cache_dir"])
+        ttk.Entry(page, textvariable=self.cache_var, width=40).grid(row=3, column=1, sticky="we", padx=(12, 4),
+                                                                    pady=(14, 4))
+        ttk.Button(page, text=t("btn.pick"), command=self._pick_cache).grid(row=3, column=2, pady=(14, 4))
+        ttk.Label(page, text=t("hint.cache_dir"), wraplength=420, justify="left").grid(
+            row=4, column=1, columnspan=2, sticky="w", padx=(12, 0))
 
     def _pick_ffmpeg(self):
         path = filedialog.askopenfilename(parent=self, title=t("dlg.pick_ffmpeg"))
         if path:
             self.ffmpeg_var.set(path)
 
+    def _pick_cache(self):
+        """Choose the cache folder in a folder dialog (starts at the folder typed in the field, if any)."""
+        path = filedialog.askdirectory(parent=self, title=t("dlg.pick_cache"),
+                                       initialdir=self.cache_var.get().strip() or None)
+        if path:
+            self.cache_var.set(path)
+
     def _tab_appearance(self, cfg):
         page = self._page("tab.appearance")
         page.columnconfigure(1, weight=1)
+        self.theme_var = tk.StringVar()
+        ttk.Label(page, text=t("field.theme")).grid(row=0, column=0, sticky="w", pady=6)
+        self.theme_box = ttk.Combobox(page, textvariable=self.theme_var, state="readonly", width=30)
+        self.theme_box.grid(row=0, column=1, sticky="w", padx=(12, 0))
+        ttk.Button(page, text=t("btn.theme_edit"), command=self._edit_theme).grid(
+            row=1, column=1, sticky="w", padx=(12, 0), pady=(8, 0))
+        self._show_themes(cfg["theme"])
+
+    def _tab_language(self, cfg):
+        """The Language tab: one box with the languages ("English", "Japanese - 日本語", ...)."""
+        page = self._page("tab.language")
+        page.columnconfigure(1, weight=1)
         self.langs = list_languages()
-        self.lang_var, self.theme_var = tk.StringVar(), tk.StringVar()
+        self.lang_var = tk.StringVar()
         ttk.Label(page, text=t("field.language")).grid(row=0, column=0, sticky="w", pady=6)
         self.lang_box = ttk.Combobox(page, textvariable=self.lang_var, state="readonly", width=30,
                                      values=[n for _c, n in self.langs])
         self.lang_box.grid(row=0, column=1, sticky="w", padx=(12, 0))
         names = dict(self.langs)
         self.lang_var.set(names.get(cfg["language"], names.get("en", cfg["language"])))
-        ttk.Label(page, text=t("field.theme")).grid(row=1, column=0, sticky="w", pady=6)
-        self.theme_box = ttk.Combobox(page, textvariable=self.theme_var, state="readonly", width=30)
-        self.theme_box.grid(row=1, column=1, sticky="w", padx=(12, 0))
-        ttk.Button(page, text=t("btn.theme_edit"), command=self._edit_theme).grid(
-            row=2, column=1, sticky="w", padx=(12, 0), pady=(8, 0))
-        self._show_themes(cfg["theme"])
 
     def _show_themes(self, code):
         """Fill the theme box and select the theme with this code."""
@@ -103,35 +175,21 @@ class SettingsDialog(Dialog):
             self._show_themes(dlg.result)
 
     def _tab_about(self):
-        page = self._page("tab.about")
-        ttk.Label(page, text="%s %s" % (APP_NAME, VERSION), font=("TkDefaultFont", 14, "bold")).pack(anchor="w")
-        ttk.Label(page, text=t("about.description"), wraplength=400, justify="left").pack(anchor="w", pady=(4, 12))
-        tools = self.app.tools
-        rows = [(t("about.python"), sys.version.split()[0]), (t("about.tk"), str(tk.TkVersion)),
-                (t("about.dnd"), t("about.dnd_on") if self.app.dnd_ok else t("about.dnd_off")),
-                (t("about.ffmpeg"), "%s (%s)" % (tools.version, tools.ffmpeg) if tools else t("about.missing")),
-                (t("about.effects"), str(len(fx.all_effects()))),
-                (t("about.config"), config_path())]
-        errors = fx.load_errors()
-        if errors:
-            rows.append((t("about.plugin_errors"), "\n".join(errors)))
-        grid = ttk.Frame(page)
-        grid.pack(anchor="w")
-        for row, (name, value) in enumerate(rows):
-            ttk.Label(grid, text=name).grid(row=row, column=0, sticky="nw", pady=2)
-            ttk.Label(grid, text=value, wraplength=320, justify="left").grid(
-                row=row, column=1, sticky="w", padx=(12, 0), pady=2)
+        """The About tab (same content as the About window of the main menu)."""
+        build_about(self._page("tab.about"), self.app)
 
     def _ok(self):
         """Copy everything into the config, save, apply what works at once, close."""
         app, cfg = self.app, self.app.cfg
-        old = (cfg["language"], cfg["theme"], cfg["ffmpeg"])
+        old = (cfg["language"], cfg["theme"], cfg["ffmpeg"], cfg["cache_dir"])
         cfg["ffmpeg"] = self.ffmpeg_var.get().strip()
+        cache = self.cache_var.get().strip()
+        cfg["cache_dir"] = os.path.abspath(os.path.expanduser(cache)) if cache else ""    # empty = default folder
         cfg["preview_max"] = _int(self.preview_var.get(), PREVIEW_RANGE[0], PREVIEW_RANGE[1], cfg["preview_max"])
         cfg["language"] = resolve_language(self._picked(self.lang_box, self.langs, cfg["language"]))
         cfg["theme"] = resolve_theme(self._picked(self.theme_box, self.themes, cfg["theme"]))
         app.save_config()
-        app.apply_settings(ffmpeg_changed=old[2] != cfg["ffmpeg"])
+        app.apply_settings(ffmpeg_changed=old[2] != cfg["ffmpeg"], cache_changed=old[3] != cfg["cache_dir"])
         self.destroy()
         if old[:2] != (cfg["language"], cfg["theme"]):
             messagebox.showinfo(t("dlg.restart"), t("msg.restart"), parent=app.root)

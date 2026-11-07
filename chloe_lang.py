@@ -24,6 +24,13 @@ LANG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lang")
 DEFAULT_LANG = "en"
 """Language code used when none is configured; also fills in missing entries."""
 
+NATIVE_NAMES = {"en": "English", "ja": "Japanese - 日本語", "de": "German - Deutsch", "fr": "French - Français",
+                "es": "Spanish - Español", "it": "Italian - Italiano", "pt": "Portuguese - Português",
+                "ru": "Russian - Русский", "zh": "Chinese - 中文", "ko": "Korean - 한국어"}
+"""Display name of a language as "<English name> - <native name>" (English has only its own name). Used by
+list_languages() when a language file has no (or an unreadable) "language.name" entry, so the list never shows a
+bare code for these languages."""
+
 _labels = {}
 """Active texts: key -> text (see set_language)."""
 
@@ -58,7 +65,8 @@ def list_languages():
     Find the available languages.
 
     @return  list of (code, display name) sorted by display name; the name is the
-             "language.name" entry of the file, or the code if it has none
+             "language.name" entry of the file (format "<English name> - <native name>", e.g. Japanese - 日本語),
+             else NATIVE_NAMES, else the code
     """
     found = []
     try:
@@ -70,7 +78,7 @@ def list_languages():
             continue
         code = fn[:-5]
         name = load_labels(os.path.join(LANG_DIR, fn)).get("language.name")
-        found.append((code, name if isinstance(name, str) and name else code))
+        found.append((code, name if isinstance(name, str) and name else NATIVE_NAMES.get(code, code)))
     return sorted(found, key=lambda item: item[1].lower())
 
 

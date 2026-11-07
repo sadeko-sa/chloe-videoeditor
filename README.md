@@ -22,7 +22,7 @@ Version 1.0.2.
 5. Hold **Original** under the preview to see the picture without effects.
 6. **File > Export video** (Ctrl+E): H.264, H.265 or VP9, with sound. **Save current frame** (Ctrl+Shift+E) writes the picture at full size as PNG / JPEG.
 
-Layer timing: *Start* is where the layer begins on the timeline, *In point* the second of the file it starts at, *Duration* how long it shows. Adjustment layers can have a time range too (0 = to the end) and an opacity (the strength of the effect). Placement: *Fit inside* keeps the whole picture, *Fill frame* crops. Projects are saved as `.cvproj` (JSON). Ctrl+Z / Ctrl+Y undo and redo (Cmd on macOS).
+Layer timing: *Start* is where the layer begins on the timeline, *In point* the second of the file it starts at, *Duration* how long it shows. Adjustment layers can have a time range too (0 = to the end) and an opacity (the strength of the effect). Placement: *Fit inside* keeps the whole picture, *Fill frame* crops. Projects are saved as `.cvproj` (JSON). **File > Open recent** lists the last 10 projects opened or saved (missing ones are dropped when chosen; *Clear list* empties it). Ctrl+Z / Ctrl+Y undo and redo (Cmd on macOS).
 
 ## How it works
 
@@ -50,7 +50,7 @@ Drop a module into `effects/` (every module not starting with `_` is imported at
 
 ## Languages and themes
 
-`lang/<code>.json` and `theme/<code>.json`, same format as Chloe Photoviewer (English and Japanese included, six themes). Choose them in Settings > Appearance (used from the next start); *Edit theme...* edits a theme file.
+`lang/<code>.json` and `theme/<code>.json`, same format as Chloe Photoviewer (English and Japanese included, six themes). Choose the language in the Language root menu (or Settings > Language) and the theme in Settings > Appearance (both used from the next start; languages are listed as English name - native name, e.g. Japanese - 日本語); *Edit theme...* edits a theme file.
 
 ## Files
 
@@ -61,4 +61,4 @@ Drop a module into `effects/` (every module not starting with `_` is imported at
     effects/  color.py, detail.py, style.py
     lang/  theme/
 
-The config `chloe_videoeditor.json` and the preview cache (`cache/`, emptied on exit) are saved next to the program; nothing is written to AppData or the home folder.
+The config `config.json` and, by default, the preview cache (`cache/`, emptied on exit) are saved next to the program; nothing is written to AppData or the home folder. Only `config.json` is read (an old `chloe_videoeditor.json` is ignored, so copy its content over if you want to keep it). The cache can be moved to any folder in Settings > General > Cache folder (empty = `cache/` next to the program); it is used at once and only `run_` folders made by this program are ever removed there.

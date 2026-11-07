@@ -1,25 +1,32 @@
 """
-config.py - The program settings as one JSON file next to the program (no Tk in here).
-Nothing is ever written to AppData, ~/.config or similar.
+config.py - The program settings as one JSON file (config.json) next to the program (no Tk in here).
+Nothing is ever written to AppData, ~/.config or similar. No other file name is read.
 """
 
 from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from .ffmpeg import APP_DIR, QUALITIES
 
-CONFIG_NAME = "chloe_videoeditor.json"
+CONFIG_NAME = "config.json"
+"""File name of the config in the program folder (no fallback to any older name)."""
 
 DEFAULTS: Dict[str, Any] = {
     "language": "", "theme": "", "geometry": "1280x800", "zoomed": False,
     "ffmpeg": "", "preview_max": 1280, "last_dir": "",
     "export_format": "h264", "export_quality": "medium",
+    "cache_dir": "", "recent": [],
 }
 """Config entries and defaults. "ffmpeg" = path of ffmpeg or its folder (empty = search);
-"preview_max" = longest side in pixels of the preview picture."""
+"preview_max" = longest side in pixels of the preview picture;
+"cache_dir" = folder that holds the preview cache (empty = cache/ in the program folder);
+"recent" = project files opened or saved last, newest first (at most RECENT_MAX)."""
+
+RECENT_MAX = 10
+"""Most entries kept in the recent projects list."""
 
 PREVIEW_RANGE = (320, 3840)
 
@@ -36,6 +43,21 @@ def _clamp(value: Any, lo: int, hi: int, default: int) -> int:
         return default
 
 
+def push_recent(recent: List[str], path: str, limit: int = RECENT_MAX) -> List[str]:
+    """
+    Put a project file at the top of the recent list.
+
+    @param recent  the list so far, newest first (not changed)
+    @param path    project file to put first
+    @param limit   most entries kept
+    @return        a new list: path first, an earlier entry of the same file removed, cut to `limit`
+    """
+    path = os.path.abspath(path)
+    key = os.path.normcase(path)
+    rest = [p for p in recent if os.path.normcase(os.path.abspath(p)) != key]
+    return ([path] + rest)[:limit]
+
+
 def load_config() -> Dict[str, Any]:
     """@return the config: defaults overridden by the saved file (values checked)"""
     cfg = dict(DEFAULTS)
@@ -47,9 +69,16 @@ def load_config() -> Dict[str, Any]:
     if isinstance(data, dict):
         cfg.update({k: v for k, v in data.items() if k in DEFAULTS})
     cfg["preview_max"] = _clamp(cfg["preview_max"], *PREVIEW_RANGE, DEFAULTS["preview_max"])
-    for key in ("language", "theme", "geometry", "ffmpeg", "last_dir", "export_format"):
+    for key in ("language", "theme", "geometry", "ffmpeg", "last_dir", "export_format", "cache_dir"):
         if not isinstance(cfg[key], str):
             cfg[key] = DEFAULTS[key]
+    # recent: only non-empty text entries, each file once, newest first; always a list of its own
+    seen, recent = set(), []
+    for item in cfg["recent"] if isinstance(cfg["recent"], list) else []:
+        if isinstance(item, str) and item and os.path.normcase(item) not in seen:
+            seen.add(os.path.normcase(item))
+            recent.append(item)
+    cfg["recent"] = recent[:RECENT_MAX]
     if cfg["export_quality"] not in QUALITIES:
         cfg["export_quality"] = DEFAULTS["export_quality"]
     cfg["zoomed"] = bool(cfg["zoomed"])
