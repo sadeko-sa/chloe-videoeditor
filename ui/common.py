@@ -7,6 +7,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from chloe_lang import t
+from chloe_theme import resolve_color
 
 from engine.ffmpeg import IS_WIN
 
@@ -81,6 +82,59 @@ def fmt_number(value, digits=2):
     """@return a number without useless trailing zeros"""
     text = ("%.*f" % (digits, value)).rstrip("0").rstrip(".")
     return text if text not in ("", "-0") else "0"
+
+
+def _mix(widget, c0, c1, p):
+    """@return color c0 moved the fraction p (0..1) towards c1, as #rrggbb"""
+    a, b = widget.winfo_rgb(c0), widget.winfo_rgb(c1)
+    return "#%02x%02x%02x" % tuple(int((x + (y - x) * p) / 257) for x, y in zip(a, b))
+
+
+def highlight_fade(label, entry, hold=100, fade=350, step=30):
+    """
+    Show that a value was changed by the program (a reset): the label lights up in the theme's selection
+    colors and fades back to normal, the number text fades from the accent color. A running fade is restarted.
+
+    @param label  ttk.Label of the field
+    @param entry  ttk.Entry showing the value (None = label only)
+    @param hold   milliseconds at full color
+    @param fade   milliseconds of the fade out
+    @param step   milliseconds between two frames
+    """
+    style = ttk.Style(label)
+    base_bg = style.lookup("TLabel", "background") or "#d9d9d9"
+    base_fg = style.lookup("TLabel", "foreground") or "#000000"
+    accent = (resolve_color(label, "palette", "select_bg") or style.lookup("TEntry", "selectbackground")
+              or "#3584e4")
+    on_accent = (resolve_color(label, "palette", "select_fg") or style.lookup("TEntry", "selectforeground")
+                 or "#ffffff")
+    try:
+        for color in (base_bg, base_fg, accent, on_accent):
+            label.winfo_rgb(color)
+    except tk.TclError:
+        return                                  # a color Tk does not know: no highlight rather than an error
+
+    old = getattr(label, "_fade_job", None)
+    if old:
+        label.after_cancel(old)
+    frames = max(1, fade // step)
+
+    def paint(i):
+        if not label.winfo_exists():
+            return
+        p = 0.0 if i < 0 else min(1.0, (i + 1) / frames)       # i < 0: the hold phase, full color
+        label.configure(background=_mix(label, accent, base_bg, p), foreground=_mix(label, on_accent, base_fg, p))
+        if entry is not None and entry.winfo_exists():
+            entry.configure(foreground=_mix(label, accent, base_fg, p))
+        if p >= 1.0:
+            label._fade_job = None
+            label.configure(background="", foreground="")      # back to the theme
+            if entry is not None and entry.winfo_exists():
+                entry.configure(foreground="")
+            return
+        label._fade_job = label.after(hold if i < 0 else step, paint, i + 1)
+
+    paint(-1)
 
 
 class Tip:

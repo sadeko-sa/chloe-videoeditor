@@ -7,7 +7,7 @@ from chloe_lang import t
 
 from engine import effect as fx
 from engine.project import FITS, MediaLayer
-from ui.common import Tip, category_label, choice_label, effect_name, fmt_number, param_label
+from ui.common import Tip, category_label, choice_label, effect_name, fmt_number, highlight_fade, param_label
 
 ON, OFF = "\u2611", "\u2610"
 
@@ -205,8 +205,12 @@ class ParamEditor(ttk.Frame):
             entry.bind(seq, typed)
 
         def reset(_event=None):
+            target = _snap(param.default, param.step, param.min, param.max, as_int)
+            if _snap(scale_var.get(), param.step, param.min, param.max, as_int) == target:
+                return                              # already at the default: nothing changed, no highlight
             scale_var.set(param.default)
             apply(param.default)
+            highlight_fade(label, entry)
 
         label.bind("<Double-Button-1>", reset)
 
