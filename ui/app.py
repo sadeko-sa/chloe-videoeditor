@@ -15,8 +15,8 @@ from engine import ffmpeg as ff
 from engine.compiler import CompileError
 from engine.config import push_recent, save_config
 from engine.preview import PreviewEngine, save_frame
-from engine.project import (PROJECT_EXT, AdjustmentLayer, EffectInstance, History, Project, ProjectError, even,
-                            load_project, save_project)
+from engine.project import (PROJECT_EXT, AdjustmentLayer, EffectInstance, History, MediaLayer, Project, ProjectError,
+                            even, load_project, save_project)
 from ui.common import IS_WIN, Tip, fmt_time
 from ui.dialogs import AboutDialog, ExportDialog, ProjectDialog, SettingsDialog
 from ui.panels import EffectPanel, LayerPanel, PropertiesPanel
@@ -46,6 +46,7 @@ class App:
         self.history = History(self.project)
         self.saved_state = self.history.current
         self.sel_layer, self.sel_effect = None, None
+        self._missing = set()                       # ids of the media layers whose file does not exist
         self.t, self._seq, self._job, self._img = 0.0, 0, None, None
         self._time_lock, self.compare = False, False
         self.inbox = queue.Queue()                  # functions from worker threads, run in the Tk thread
@@ -103,6 +104,7 @@ class App:
         self.col_bg = resolve_color(root, "viewer", "canvas_bg") or "#101010"
         self.col_info = resolve_color(root, "viewer", "info_text") or "#e6e6e6"
         self.col_err = resolve_color(root, "viewer", "error_text") or "#ff6b6b"
+        root.bind("<FocusIn>", self._focus_in)
         self._menus()
         panes = ttk.PanedWindow(root, orient="horizontal")
         panes.pack(fill="both", expand=True, padx=6, pady=6)
@@ -381,7 +383,19 @@ class App:
         return self.project.find(self.sel_layer)
 
     def refresh_layers(self):
-        self.layers.refresh(self.project, self.sel_layer)
+        self._missing = self.media_missing()
+        self.layers.refresh(self.project, self.sel_layer, self._missing)
+
+    def media_missing(self):
+        """@return ids of the media layers whose file does not exist"""
+        return {l.id for l in self.project.media_layers() if l.is_missing()}
+
+    def _focus_in(self, event):
+        """The window got the focus back: a file may have been moved away or back meanwhile."""
+        if event.widget is self.root and self.media_missing() != self._missing:
+            self.refresh_layers()
+            self.refresh_inspector()
+            self.request_preview()
 
     def refresh_inspector(self):
         layer = self.selected()
@@ -503,6 +517,41 @@ class App:
         if attr == "name":
             self.refresh_layers()
         self.touch((layer_id, merge) if merge else None)
+
+    def relink_layer(self, layer_id):
+        """Let the user pick the file of a media layer (the old one was moved or deleted)."""
+        layer = self.project.find(layer_id)
+        if not isinstance(layer, MediaLayer):
+            return
+        folder = os.path.dirname(layer.path)
+        path = filedialog.askopenfilename(parent=self.root, title=t("dlg.relink"), filetypes=MEDIA_TYPES,
+                                          initialdir=folder if os.path.isdir(folder) else (self.cfg["last_dir"] or None),
+                                          initialfile=os.path.basename(layer.path))
+        if path:
+            self.set_media_path(layer_id, path)
+
+    def set_media_path(self, layer_id, path):
+        """Point a media layer to another file. The file is probed; timing, effects and name stay as they are."""
+        layer = self.project.find(layer_id)
+        path = path.strip().strip('"')
+        if not isinstance(layer, MediaLayer) or not path or path == layer.path:
+            return
+        if not self.tools:
+            messagebox.showwarning(t("dlg.error"), t("msg.no_ffmpeg"), parent=self.root)
+            return
+        try:
+            info = ff.probe(self.tools, path)
+        except ff.FFmpegError as exc:
+            messagebox.showerror(t("dlg.error"), t("msg.cannot_open", name=os.path.basename(path), error=exc),
+                                 parent=self.root)
+            self.refresh_inspector()                # the field shows the old path again
+            return
+        layer.path, layer.source_duration = info.path, info.duration
+        layer.has_audio, layer.is_image = info.has_audio, info.is_image
+        self.cfg["last_dir"] = os.path.dirname(path)
+        self.refresh_layers()
+        self.refresh_inspector()
+        self.touch()
 
     def project_settings(self):
         result = ProjectDialog(self).result

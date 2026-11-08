@@ -10,6 +10,8 @@ from engine.project import FITS, MediaLayer
 from ui.common import Tip, category_label, choice_label, effect_name, fmt_number, highlight_fade, param_label
 
 ON, OFF = "\u2611", "\u2610"
+WARN = "\u26A0 "
+"""Put in front of the name of a media layer whose file is missing (the color alone is easy to overlook)."""
 
 
 def _snap(value, step, lo, hi, as_int):
@@ -35,6 +37,7 @@ class LayerPanel(ttk.Frame):
                                          ("kind", "col.type", 80, False)):
             self.tree.heading(col, text=t(key) if key else "")
             self.tree.column(col, width=width, stretch=stretch, anchor="center" if col == "on" else "w")
+        self.tree.tag_configure("missing", foreground=app.col_err)
         self.tree.pack(fill="both", expand=True)
         self.tree.bind("<<TreeviewSelect>>", self._selected)
         self.tree.bind("<Button-1>", self._click)
@@ -49,13 +52,15 @@ class LayerPanel(ttk.Frame):
             btn.pack(side="left", padx=(0, 4))
             Tip(btn, tip)
 
-    def refresh(self, project, selected):
-        """Show the layers of the project and select one."""
+    def refresh(self, project, selected, missing=()):
+        """Show the layers of the project and select one. `missing` = ids of layers whose media file is gone."""
         self._busy = True
         self.tree.delete(*self.tree.get_children())
         for layer in reversed(project.layers):
-            self.tree.insert("", "end", iid=layer.id,
-                             values=(ON if layer.enabled else OFF, layer.name, t("kind." + layer.kind)))
+            gone = layer.id in missing
+            self.tree.insert("", "end", iid=layer.id, tags=("missing",) if gone else (),
+                             values=(ON if layer.enabled else OFF, (WARN + layer.name) if gone else layer.name,
+                                     t("kind." + layer.kind)))
         if selected and self.tree.exists(selected):
             self.tree.selection_set(selected)
             self.tree.see(selected)
@@ -102,6 +107,8 @@ class PropertiesPanel(ttk.LabelFrame):
         entry.bind("<FocusOut>", lambda e: app.set_layer(layer.id, "name", name.get().strip() or layer.name, "name"))
         self._row = 1
         is_media = isinstance(layer, MediaLayer)
+        if is_media:
+            self._file_row(layer)
         self._number(layer, "start", "field.start", 0, 36000, 0.1, 3)
         if is_media:
             self._number(layer, "in_point", "field.in_point", 0, max(layer.source_duration, 36000), 0.1, 3)
@@ -116,6 +123,25 @@ class PropertiesPanel(ttk.LabelFrame):
             fit.current(FITS.index(layer.fit))
             fit.grid(row=self._row, column=1, sticky="w", padx=(8, 0))
             fit.bind("<<ComboboxSelected>>", lambda e: app.set_layer(layer.id, "fit", FITS[max(fit.current(), 0)]))
+
+    def _file_row(self, layer):
+        """The media file of the layer: path field (Enter applies it), Pick... button, red when the file is missing."""
+        app, row = self.app, self._row
+        missing = layer.is_missing()
+        ttk.Label(self, text=t("field.file")).grid(row=row, column=0, sticky="w", pady=2)
+        var = tk.StringVar(value=layer.path)
+        entry = ttk.Entry(self, textvariable=var, **({"foreground": app.col_err} if missing else {}))
+        entry.grid(row=row, column=1, sticky="we", padx=(8, 0))
+        entry.xview_moveto(1.0)                     # a long path: show its end, the file name
+        for seq in ("<Return>", "<KP_Enter>"):      # not on focus out: a failed probe opens a dialog, which moves the focus
+            entry.bind(seq, lambda e: app.set_media_path(layer.id, var.get()))
+        ttk.Button(self, text=t("btn.pick"), width=8,
+                   command=lambda: app.relink_layer(layer.id)).grid(row=row, column=2, padx=(4, 0))
+        self._row += 1
+        if missing:
+            ttk.Label(self, text=t("msg.file_missing"), foreground=app.col_err, wraplength=260,
+                      justify="left").grid(row=self._row, column=0, columnspan=3, sticky="w", pady=(0, 4))
+            self._row += 1
 
     def _number(self, layer, attr, key, lo, hi, step, digits, scale=1):
         """One spin box row. `scale` = shown value / stored value (opacity is stored 0..1, shown in %)."""

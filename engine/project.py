@@ -155,6 +155,10 @@ class MediaLayer(Layer):
     volume: float = 1.0
     kind: ClassVar[str] = "media"
 
+    def is_missing(self) -> bool:
+        """@return True if the media file does not exist (moved, renamed, deleted, drive not connected)"""
+        return not os.path.isfile(self.path)
+
     def to_dict(self) -> Dict[str, Any]:
         data = super().to_dict()
         data.update(path=self.path, in_point=self.in_point, source_duration=self.source_duration,

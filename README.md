@@ -22,6 +22,8 @@ Version 1.0.2.
 5. Hold **Original** under the preview to see the picture without effects.
 6. **File > Export video** (Ctrl+E): H.264, H.265 or VP9, with sound. **Save current frame** (Ctrl+Shift+E) writes the picture at full size as PNG / JPEG.
 
+Media file: a media layer shows its file in the *File* field. If the file was moved or deleted, the layer is shown in red with a warning sign in the layer list and the field turns red; click *Pick...* (or type a path and press Enter) to point it to the new location. Timing and effects stay. The check is repeated when the window gets the focus again.
+
 Layer timing: *Start* is where the layer begins on the timeline, *In point* the second of the file it starts at, *Duration* how long it shows. Adjustment layers can have a time range too (0 = to the end) and an opacity (the strength of the effect). Placement: *Fit inside* keeps the whole picture, *Fill frame* crops. Projects are saved as `.cvproj` (JSON). **File > Open recent** lists the last 10 projects opened or saved (missing ones are dropped when chosen; *Clear list* empties it). Ctrl+Z / Ctrl+Y undo and redo (Cmd on macOS).
 
 ## How it works

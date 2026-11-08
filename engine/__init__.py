@@ -1,0 +1,5 @@
+"""Backend of Chloe Videoeditor: no Tk in here, only the project model, the FFmpeg filter graph and processes."""
+
+APP_NAME = "Chloe Videoeditor"
+VERSION = "1.0.2"
+"""Program version; raised with every delivery."""
