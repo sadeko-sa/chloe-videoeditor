@@ -1,6 +1,6 @@
 # Chloe Videoeditor
 Small cross platform video editor (Windows, Linux, macOS) in Python / Tkinter. All picture and sound processing is done by FFmpeg.
-Version 1.0.2.
+Version 1.3.0.
 
 ## Install and run
 
@@ -20,7 +20,7 @@ Version 1.0.2.
 3. Select a layer, **Add effect** and move the sliders. Effects run in list order. Double click a parameter name to reset it. Click the check mark to switch a layer or an effect off.
 4. Move through the video with the slider, the arrow buttons or the Left / Right keys (Shift = one second, Home / End) in the preview area.
 5. Hold **Original** under the preview to see the picture without effects.
-6. **File > Export video** (Ctrl+E): H.264, H.265 or VP9, with sound. **Save current frame** (Ctrl+Shift+E) writes the picture at full size as PNG / JPEG.
+6. **File > Export video** (Ctrl+E): H.264, H.265 or VP9, with sound. The export is added to the **job queue** (File > Job queue, Ctrl+Q) and rendered by a background worker, so you can keep editing. The queue window shows every worker and its job, every job with a progress bar and a colored status (waiting, rendering, paused, done, failed, stopped), and a details panel for the selected job with a button that copies its FFmpeg command; jobs can be paused and resumed, stopped, deleted, and finished ones cleared. A finished or failed job rings the system bell. Settings > Worker sets the number of workers (default 1) and the thread limit of each worker (0 = automatic). **Save current frame** (Ctrl+Shift+E) writes the picture at full size as PNG / JPEG.
 
 Media file: a media layer shows its file in the *File* field. If the file was moved or deleted, the layer is shown in red with a warning sign in the layer list and the field turns red; click *Pick...* (or type a path and press Enter) to point it to the new location. Timing and effects stay. The check is repeated when the window gets the focus again.
 
@@ -30,7 +30,7 @@ Layer timing: *Start* is where the layer begins on the timeline, *In point* the 
 
 * `engine/compiler.py` turns the project into ONE FFmpeg filter graph. Nothing is processed in Python.
 * The preview renders a single frame: media files are opened with a seek and decoded for one picture, layers that are off at that second are left out. Pictures are cached; while you edit a layer the picture beneath it is cached too, so moving a slider only runs the effects of that layer on one small PNG. A newer request kills the render still running.
-* The export uses the same layer code for the whole timeline.
+* The export uses the same layer code for the whole timeline. Each queued job is a snapshot of the project at that moment (later edits do not change it). The thread limit is passed to FFmpeg as `-threads:v` for decoding and encoding and `-filter_complex_threads` for the filters.
 
 ## Adding an effect
 
@@ -52,14 +52,14 @@ Drop a module into `effects/` (every module not starting with `_` is imported at
 
 ## Languages and themes
 
-`lang/<code>.json` and `theme/<code>.json`, same format as Chloe Photoviewer (English and Japanese included, six themes). Choose the language in the Language root menu (or Settings > Language) and the theme in Settings > Appearance (both used from the next start; languages are listed as English name - native name, e.g. Japanese - 日本語); *Edit theme...* edits a theme file.
+`lang/<code>.json` and `theme/<code>.json`, same format as Chloe Photoviewer (English and Japanese included, six themes). Choose the language in the Language root menu (or Settings > Language) and the theme in the Settings menu > Theme (or Settings > Appearance; both used from the next start; languages are listed as English name - native name, e.g. Japanese - 日本語); *Settings > Theme > Edit theme...* edits a theme file. The Settings dialog is in its own Settings menu (Ctrl+,).
 
 ## Files
 
     chloe_videoeditor.py   entry point
     chloe_lang.py, chloe_theme.py   language and theme support (shared with Chloe Photoviewer)
-    engine/   effect.py (effect interface + registry), project.py, compiler.py, ffmpeg.py, preview.py, config.py  (no Tk)
-    ui/       app.py, panels.py, dialogs.py, common.py
+    engine/   effect.py (effect interface + registry), project.py, compiler.py, ffmpeg.py, jobs.py (job queue + workers), preview.py, config.py  (no Tk)
+    ui/       app.py, panels.py, dialogs.py, jobs.py (job queue window), common.py
     effects/  color.py, detail.py, style.py
     lang/  theme/
 

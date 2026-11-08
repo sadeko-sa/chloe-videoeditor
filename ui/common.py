@@ -84,7 +84,7 @@ def fmt_number(value, digits=2):
     return text if text not in ("", "-0") else "0"
 
 
-def _mix(widget, c0, c1, p):
+def mix_color(widget, c0, c1, p):
     """@return color c0 moved the fraction p (0..1) towards c1, as #rrggbb"""
     a, b = widget.winfo_rgb(c0), widget.winfo_rgb(c1)
     return "#%02x%02x%02x" % tuple(int((x + (y - x) * p) / 257) for x, y in zip(a, b))
@@ -123,9 +123,9 @@ def highlight_fade(label, entry, hold=100, fade=350, step=30):
         if not label.winfo_exists():
             return
         p = 0.0 if i < 0 else min(1.0, (i + 1) / frames)       # i < 0: the hold phase, full color
-        label.configure(background=_mix(label, accent, base_bg, p), foreground=_mix(label, on_accent, base_fg, p))
+        label.configure(background=mix_color(label, accent, base_bg, p), foreground=mix_color(label, on_accent, base_fg, p))
         if entry is not None and entry.winfo_exists():
-            entry.configure(foreground=_mix(label, accent, base_fg, p))
+            entry.configure(foreground=mix_color(label, accent, base_fg, p))
         if p >= 1.0:
             label._fade_job = None
             label.configure(background="", foreground="")      # back to the theme
@@ -182,6 +182,17 @@ def ok_cancel(parent, ok, cancel, ok_key="btn.ok"):
     return row
 
 
+def buttons_row(parent, *buttons):
+    """
+    @param buttons  (text key, command) pairs; the first one is the left-most. All are packed at the right edge.
+    @return a frame (not yet placed) with the buttons
+    """
+    row = ttk.Frame(parent)
+    for key, command in reversed(buttons):
+        ttk.Button(row, text=t(key), command=command).pack(side="right", padx=3)
+    return row
+
+
 class Dialog(tk.Toplevel):
     """Modal dialog base. Build the widgets, then call show(); .result is None if cancelled."""
 
@@ -201,7 +212,7 @@ class Dialog(tk.Toplevel):
         """
         if ok:
             self.bind("<Return>", lambda e: ok())
-        for seq in ("<Escape>", "<Control-w>", "<Control-W>"):
+        for seq in ("<Escape>", "<Control-w>", "<Control-W>") + (("<Command-w>",) if sys.platform == "darwin" else ()):
             self.bind(seq, lambda e: self.destroy())
         center_on(self, self.parent)
         self.deiconify()

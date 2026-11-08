@@ -1,7 +1,6 @@
 """ui/dialogs.py - Settings, project settings and export dialogs."""
 
 import os
-import queue
 import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -14,8 +13,9 @@ from engine import effect as fx
 from engine import ffmpeg as ff
 from engine.compiler import CompileError, compile_export
 from engine.config import PREVIEW_RANGE, config_path
+from engine.jobs import THREADS_RANGE, WORKERS_RANGE, QueueError
 from engine.project import even
-from ui.common import Dialog, fmt_number, ok_cancel
+from ui.common import Dialog, buttons_row, fmt_number, ok_cancel
 
 
 def _int(text, lo, hi, default):
@@ -82,6 +82,7 @@ class SettingsDialog(Dialog):
         self.nb = ttk.Notebook(frm)
         self.nb.pack(fill="both", expand=True)
         self._tab_general(cfg)
+        self._tab_workers(cfg)
         self._tab_appearance(cfg)
         self._tab_language(cfg)                                     # next to the last tab (About)
         self._tab_about()
@@ -119,6 +120,20 @@ class SettingsDialog(Dialog):
         ttk.Button(page, text=t("btn.pick"), command=self._pick_cache).grid(row=3, column=2, pady=(14, 4))
         ttk.Label(page, text=t("hint.cache_dir"), wraplength=420, justify="left").grid(
             row=4, column=1, columnspan=2, sticky="w", padx=(12, 0))
+
+    def _tab_workers(self, cfg):
+        """The Workers tab: how many workers render the job queue, and the thread limit of each."""
+        page = self._page("tab.workers")
+        page.columnconfigure(1, weight=1)
+        self.workers_var = tk.StringVar(value=str(cfg["workers"]))
+        self.threads_var = tk.StringVar(value=str(cfg["worker_threads"]))
+        for row, (key, var, bounds) in enumerate((("field.workers", self.workers_var, WORKERS_RANGE),
+                                                  ("field.worker_threads", self.threads_var, THREADS_RANGE))):
+            ttk.Label(page, text=t(key)).grid(row=row, column=0, sticky="w", pady=4)
+            ttk.Spinbox(page, textvariable=var, from_=bounds[0], to=bounds[1], width=8).grid(
+                row=row, column=1, sticky="w", padx=(12, 0), pady=4)
+        ttk.Label(page, text=t("hint.workers"), wraplength=420, justify="left").grid(
+            row=2, column=0, columnspan=2, sticky="w", pady=(10, 0))
 
     def _pick_ffmpeg(self):
         path = filedialog.askopenfilename(parent=self, title=t("dlg.pick_ffmpeg"))
@@ -186,6 +201,8 @@ class SettingsDialog(Dialog):
         cache = self.cache_var.get().strip()
         cfg["cache_dir"] = os.path.abspath(os.path.expanduser(cache)) if cache else ""    # empty = default folder
         cfg["preview_max"] = _int(self.preview_var.get(), PREVIEW_RANGE[0], PREVIEW_RANGE[1], cfg["preview_max"])
+        cfg["workers"] = _int(self.workers_var.get(), *WORKERS_RANGE, cfg["workers"])
+        cfg["worker_threads"] = _int(self.threads_var.get(), *THREADS_RANGE, cfg["worker_threads"])
         cfg["language"] = resolve_language(self._picked(self.lang_box, self.langs, cfg["language"]))
         cfg["theme"] = resolve_theme(self._picked(self.theme_box, self.themes, cfg["theme"]))
         app.save_config()
@@ -228,14 +245,12 @@ class ProjectDialog(Dialog):
 
 
 class ExportDialog(Dialog):
-    """Pick format, quality and file, then render the whole project with progress and Cancel."""
+    """Pick format, quality and file; OK puts the export into the queue (result True) and closes."""
 
     def __init__(self, app):
         super().__init__(app.root, "dlg.export")
         self.app = app
         self.presets = ff.available_presets(app.tools)
-        self.export = None
-        self.events = queue.Queue()
         cfg = app.cfg
         frm = ttk.Frame(self, padding=14)
         frm.pack(fill="both", expand=True)
@@ -256,21 +271,15 @@ class ExportDialog(Dialog):
         ttk.Label(frm, text=t("field.output")).grid(row=2, column=0, sticky="w", pady=4)
         self.path_entry = ttk.Entry(frm, textvariable=self.path_var, width=44)
         self.path_entry.grid(row=2, column=1, sticky="we", padx=(12, 4))
-        self.pick_btn = ttk.Button(frm, text=t("btn.pick"), command=self._pick)
-        self.pick_btn.grid(row=2, column=2)
+        ttk.Button(frm, text=t("btn.pick"), command=self._pick).grid(row=2, column=2)
         project = app.project
         ttk.Label(frm, text=t("export.info", width=project.width, height=project.height,
                               fps=fmt_number(project.fps, 3), seconds=fmt_number(project.duration(), 2))).grid(
             row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
-        self.bar = ttk.Progressbar(frm, maximum=1000)
-        self.bar.grid(row=4, column=0, columnspan=3, sticky="we", pady=(14, 0))
-        self.status = ttk.Label(frm, text="")
-        self.status.grid(row=5, column=0, columnspan=3, sticky="w", pady=(4, 0))
-        self.buttons = ok_cancel(frm, self._start, self._cancel, "btn.export")
-        self.buttons.grid(row=6, column=0, columnspan=3, sticky="we", pady=(12, 0))
-        self.protocol("WM_DELETE_WINDOW", self._cancel)
+        buttons_row(frm, ("btn.queue", lambda: self._ok("add")), ("btn.start", lambda: self._ok("start")),
+                    ("btn.cancel", self.destroy)).grid(row=4, column=0, columnspan=3, sticky="we", pady=(12, 0))
         self._format_changed()
-        self.show(self.path_entry)
+        self.show(self.path_entry, lambda: self._ok("add"))
 
     def _preset_code(self):
         i = self.format_box.current()
@@ -295,14 +304,12 @@ class ExportDialog(Dialog):
         if path:
             self.path_var.set(path)
 
-    def _lock(self, locked):
-        state = "disabled" if locked else "normal"
-        for widget in (self.path_entry, self.pick_btn):
-            widget.configure(state=state)
-        for box in (self.format_box, self.quality_box):
-            box.configure(state="disabled" if locked else "readonly")
+    def _ok(self, action):
+        """
+        Compile the project as it is now and queue the export.
 
-    def _start(self):
+        @param action  "add" puts the job in the queue; "start" also starts the queue
+        """
         app, path = self.app, self.path_var.get().strip()
         if not path:
             messagebox.showerror(t("dlg.error"), t("msg.output_required"), parent=self)
@@ -316,47 +323,12 @@ class ExportDialog(Dialog):
             messagebox.showerror(t("dlg.error"), str(exc), parent=self)
             return
         code, quality = self._preset_code(), ff.QUALITIES[max(self.quality_box.current(), 0)]
+        try:
+            app.jobs.add(ff.Export(app.tools, job, self.presets[code], quality, path))
+        except QueueError:
+            messagebox.showerror(t("dlg.error"), t("msg.job_duplicate", name=os.path.basename(path)), parent=self)
+            return
         app.cfg.update(export_format=code, export_quality=quality, last_dir=os.path.dirname(path))
         app.save_config()
-        self._lock(True)
-        self.status.configure(text=t("export.running"))
-        for child in self.buttons.winfo_children():
-            child.destroy()
-        ttk.Button(self.buttons, text=t("btn.cancel"), command=self._cancel).pack(side="right")
-        self.export = ff.Export(app.tools, job, self.presets[code], quality, path,
-                                lambda f: self.events.put(("progress", f)),
-                                lambda err, cancelled: self.events.put(("done", (err, cancelled))))
-        self.export.start()
-        self._poll()
-
-    def _poll(self):
-        """Take progress messages from the export thread (Tk is not thread safe)."""
-        finished = None
-        try:
-            while True:
-                kind, value = self.events.get_nowait()
-                if kind == "progress":
-                    self.bar.configure(value=int(value * 1000))
-                    self.status.configure(text=t("export.progress", percent=int(value * 100)))
-                else:
-                    finished = value
-        except queue.Empty:
-            pass
-        if finished is None:
-            self.after(100, self._poll)
-            return
-        err, cancelled = finished
-        self.export = None
-        if err:
-            messagebox.showerror(t("dlg.error"), t("msg.export_failed", error=err), parent=self)
-        elif not cancelled:
-            messagebox.showinfo(t("dlg.export"), t("msg.export_done", path=self.path_var.get()), parent=self)
+        self.result, self.queued_name = action, os.path.basename(path)
         self.destroy()
-
-    def _cancel(self):
-        """Cancel a running export, or just close."""
-        if self.export:
-            self.export.cancel()
-            self.status.configure(text=t("export.cancelling"))
-        else:
-            self.destroy()

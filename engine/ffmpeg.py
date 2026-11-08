@@ -9,6 +9,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -91,6 +92,29 @@ def run(args: List[str], timeout: float = 60) -> str:
     if proc.returncode != 0:
         raise FFmpegError(_tail(err.decode("utf-8", "replace")))
     return out.decode("utf-8", "replace")
+
+
+def _suspend(proc: subprocess.Popen, stop: bool) -> None:
+    """
+    Freeze or thaw a running process without ending it (SIGSTOP / SIGCONT; NtSuspendProcess / NtResumeProcess on
+    Windows). Does nothing if the process is already gone.
+    """
+    if proc.poll() is not None:
+        return
+    if not IS_WIN:
+        try:
+            os.kill(proc.pid, signal.SIGSTOP if stop else signal.SIGCONT)
+        except OSError:
+            pass
+        return
+    import ctypes
+    access = 0x0800                                 # PROCESS_SUSPEND_RESUME
+    kernel, ntdll = ctypes.windll.kernel32, ctypes.windll.ntdll
+    kernel.OpenProcess.restype = ctypes.c_void_p
+    handle = kernel.OpenProcess(access, False, proc.pid)
+    if handle:
+        (ntdll.NtSuspendProcess if stop else ntdll.NtResumeProcess)(ctypes.c_void_p(handle))
+        kernel.CloseHandle(ctypes.c_void_p(handle))
 
 
 def _tail(text: str, lines: int = 8) -> str:
@@ -263,45 +287,88 @@ def render_frame(tools: Tools, job: Job, final: str, prefix: Optional[str] = Non
 
 class Export:
     """
-    One export running in a thread.
+    One export, run by the caller's thread (the job queue of engine/jobs.py runs it in a worker).
 
-        job = Export(tools, graph_job, preset, "medium", "out.mp4", fps, on_progress, on_done)
-        job.start();  ... job.cancel()
+        export = Export(tools, graph_job, preset, "medium", "out.mp4", on_progress)
+        error = export.run(threads=2)           # blocks; export.cancel() from another thread stops it
 
-    on_progress(fraction 0..1) and on_done(error or None, cancelled) are called from the thread.
+    on_progress(fraction 0..1) is called from the thread that runs the export.
     The video is written to a temporary name and renamed when it is complete.
     """
 
     def __init__(self, tools: Tools, job: Job, preset: Preset, quality: str, out_path: str,
-                 on_progress: Callable[[float], None], on_done: Callable[[Optional[str], bool], None]):
+                 on_progress: Optional[Callable[[float], None]] = None):
         self.tools, self.job, self.preset, self.quality = tools, job, preset, quality
-        self.out_path, self.on_progress, self.on_done = out_path, on_progress, on_done
+        self.out_path, self.on_progress = out_path, on_progress
         self._proc: Optional[subprocess.Popen] = None
         self._cancelled = False
+        self._paused = False
         self._lock = threading.Lock()
 
-    def start(self) -> None:
-        threading.Thread(target=self._run, daemon=True).start()
+    @property
+    def cancelled(self) -> bool:
+        """@return True once cancel() was called"""
+        return self._cancelled
+
+    @property
+    def paused(self) -> bool:
+        """@return True between pause() and resume()"""
+        return self._paused
+
+    def pause(self) -> None:
+        """Freeze the export where it is (also if its process has not started yet). Safe from any thread."""
+        with self._lock:
+            self._paused = True
+            if self._proc:
+                _suspend(self._proc, True)
+
+    def resume(self) -> None:
+        """Let a paused export go on. Safe from any thread."""
+        with self._lock:
+            self._paused = False
+            if self._proc:
+                _suspend(self._proc, False)
 
     def cancel(self) -> None:
+        """Stop the export: kills the running process, or keeps run() from starting one. Safe from any thread."""
         with self._lock:
             self._cancelled = True
             if self._proc and self._proc.poll() is None:
                 self._proc.kill()
 
-    def command(self, target: str) -> List[str]:
-        """@return the full FFmpeg command line writing to `target`"""
+    def reset(self) -> None:
+        """Make a finished, failed or stopped export runnable again (cancel and pause flags dropped). Only call while run() is not running."""
+        with self._lock:
+            self._proc, self._cancelled, self._paused = None, False, False
+
+    def command(self, target: str, threads: int = 0) -> List[str]:
+        """
+        @param target   file the command writes to
+        @param threads  thread limit for decoding, filtering and encoding; 0 = FFmpeg decides
+        @return         the full FFmpeg command line
+        """
         job, p = self.job, self.preset
-        args = _base(self.tools) + ["-progress", "pipe:1", "-nostats"] + job.input_args()
+        limit = ["-threads:v", str(threads)] if threads > 0 else []
+        args = _base(self.tools) + ["-progress", "pipe:1", "-nostats"]
+        if threads > 0:
+            args += ["-filter_complex_threads", str(threads)]
+        for item in job.inputs:
+            args += limit + item
         args += ["-filter_complex", job.graph, "-map", "[%s]" % job.video]
-        args += ["-c:v", p.encoder, "-crf", str(p.crf[self.quality])] + list(p.video)
+        args += ["-c:v", p.encoder] + limit + ["-crf", str(p.crf[self.quality])] + list(p.video)
         if job.audio:
             args += ["-map", "[%s]" % job.audio] + list(p.audio)
         else:
             args += ["-an"]
         return args + ["-t", "%.6f" % job.duration, target]
 
-    def _run(self) -> None:
+    def run(self, threads: int = 0) -> Optional[str]:
+        """
+        Render the project into the output file and wait until FFmpeg is done.
+
+        @param threads  see command()
+        @return         None if it finished or was cancelled (see `cancelled`), else the error text
+        """
         root, ext = os.path.splitext(self.out_path)
         target = root + ".chloe-tmp" + ext
         error: Optional[str] = None
@@ -309,13 +376,16 @@ class Export:
         try:
             with self._lock:
                 if self._cancelled:
-                    return self.on_done(None, True)
-                self._proc = popen(self.command(target), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    return None
+                self._proc = popen(self.command(target, threads), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                    universal_newlines=True, encoding="utf-8", errors="replace")
+                if self._paused:
+                    _suspend(self._proc, True)
             for line in self._proc.stdout:
                 m = re.match(r"out_time_(?:us|ms)=(\d+)", line)
                 if m:
-                    self.on_progress(min(int(m.group(1)) / 1e6 / self.job.duration, 1.0))
+                    if self.on_progress:
+                        self.on_progress(min(int(m.group(1)) / 1e6 / self.job.duration, 1.0))
                 elif "=" not in line.split(" ")[0]:
                     lines.append(line)
             self._proc.wait()
@@ -333,4 +403,4 @@ class Export:
                     os.remove(target)
                 except OSError:
                     pass
-        self.on_done(error, self._cancelled)
+        return error

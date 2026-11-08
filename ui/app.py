@@ -8,17 +8,19 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from chloe_lang import list_languages, resolve_language, set_language, t
-from chloe_theme import apply_theme, resolve_color, set_theme
+from chloe_theme import ThemeDialog, apply_theme, list_themes, resolve_color, resolve_theme, set_theme
 
 from engine import APP_NAME, VERSION
 from engine import ffmpeg as ff
 from engine.compiler import CompileError
 from engine.config import push_recent, save_config
+from engine.jobs import JobQueue, JobState
 from engine.preview import PreviewEngine, save_frame
 from engine.project import (PROJECT_EXT, AdjustmentLayer, EffectInstance, History, MediaLayer, Project, ProjectError,
                             even, load_project, save_project)
 from ui.common import IS_WIN, Tip, fmt_time
 from ui.dialogs import AboutDialog, ExportDialog, ProjectDialog, SettingsDialog
+from ui.jobs import JobsWindow
 from ui.panels import EffectPanel, LayerPanel, PropertiesPanel
 
 try:                                            # optional: pip install tkinterdnd2
@@ -53,6 +55,9 @@ class App:
         self.tools = ff.locate(cfg["ffmpeg"])
         self.engine = PreviewEngine(self.tools, lambda seq, path, err: self.inbox.put(
             lambda: self._on_result(seq, path, err)), cfg["cache_dir"])
+        self.jobs = JobQueue(cfg["workers"], cfg["worker_threads"],
+                             lambda job: self.inbox.put(lambda: self._job_changed(job)))
+        self.jobs_win = None
         self._build()
         self.update_title()
         self.root.after(40, self._poll)
@@ -183,10 +188,10 @@ class App:
         add(file_menu, "menu.add_adjustment", self.add_adjustment, "l")
         file_menu.add_separator()
         add(file_menu, "menu.export", self.export_dialog, "e")
+        add(file_menu, "menu.jobs", self.show_jobs, "q")
         add(file_menu, "menu.save_frame", self.save_frame_dialog, "e", True)
         file_menu.add_separator()
-        add(file_menu, "menu.settings", lambda: SettingsDialog(self), ",")
-        add(file_menu, "menu.quit", self.quit, "q")
+        add(file_menu, "menu.quit", self.quit, "w")
         edit = tk.Menu(bar, tearoff=0)
         add(edit, "menu.undo", self.undo, "z")
         add(edit, "menu.redo", self.redo, "y")
@@ -196,6 +201,13 @@ class App:
         add(edit, "menu.duplicate", self.duplicate_layer, "d")
         bar.add_cascade(label=t("menu.file"), menu=file_menu)
         bar.add_cascade(label=t("menu.edit"), menu=edit)
+        # root menu "Settings": the theme (one radio entry per theme, then Edit theme), then the settings dialog
+        settings = tk.Menu(bar, tearoff=0)
+        self.theme_menu = tk.Menu(settings, tearoff=0)              # filled by _fill_themes()
+        self.theme_var = tk.StringVar(master=root, value=self.cfg["theme"])
+        settings.add_cascade(label=t("menu.theme"), menu=self.theme_menu)
+        add(settings, "menu.settings", lambda: SettingsDialog(self), ",")
+        bar.add_cascade(label=t("menu.settings_menu"), menu=settings)
         # root menu "Language": one radio entry per language ("<English name> - <native name>")
         lang_menu = tk.Menu(bar, tearoff=0)
         self.lang_var = tk.StringVar(master=root, value=self.cfg["language"])
@@ -209,6 +221,39 @@ class App:
         bar.add_cascade(label=t("menu.help"), menu=help_menu)
         root.config(menu=bar)
         self._fill_recent()
+        self._fill_themes()
+
+    def _fill_themes(self):
+        """Rebuild the Settings > Theme submenu: the themes of theme/ as radio entries, then Edit theme."""
+        menu = self.theme_menu
+        menu.delete(0, "end")
+        self.theme_var.set(self.cfg["theme"])
+        for code, name in list_themes():
+            menu.add_radiobutton(label=name, variable=self.theme_var, value=code,
+                                 command=lambda c=code: self.choose_theme(c))
+        menu.add_separator()
+        menu.add_command(label=t("btn.theme_edit"), command=self.edit_theme)
+
+    def choose_theme(self, code):
+        """
+        Theme menu: save the chosen theme in the config. It is used from the next start, like the language.
+
+        @param code  theme code of the chosen entry
+        """
+        code = resolve_theme(code)
+        if code == self.cfg["theme"]:
+            return
+        self.cfg["theme"] = code
+        self.save_config()
+        self.theme_var.set(code)
+        messagebox.showinfo(t("dlg.restart"), t("msg.restart"), parent=self.root)
+
+    def edit_theme(self):
+        """Open the theme editor on the current theme; a theme saved there becomes the chosen one."""
+        dlg = ThemeDialog(self.root, self.cfg["theme"])
+        if dlg.result:
+            self.choose_theme(dlg.result)
+        self._fill_themes()
 
     def choose_language(self, code):
         """
@@ -258,6 +303,8 @@ class App:
             self.engine.tools = self.tools
             if not self.tools:
                 messagebox.showwarning(t("dlg.error"), t("msg.no_ffmpeg"), parent=self.root)
+        self.jobs.set_workers(self.cfg["workers"])
+        self.jobs.set_threads(self.cfg["worker_threads"])
         self.request_preview(10)
 
     def run(self, path=None):
@@ -268,6 +315,8 @@ class App:
     def quit(self):
         if not self.confirm_discard():
             return
+        if self.jobs.active_count() and not messagebox.askyesno(t("dlg.export"), t("msg.quit_jobs"), parent=self.root):
+            return
         try:
             zoomed = self.root.state() == "zoomed" if IS_WIN or IS_MAC else bool(self.root.attributes("-zoomed"))
         except tk.TclError:
@@ -276,6 +325,7 @@ class App:
         if not self.cfg["zoomed"]:
             self.cfg["geometry"] = self.root.geometry()
         self.save_config()
+        self.jobs.shutdown()
         self.engine.close()
         self.root.destroy()
 
@@ -761,7 +811,31 @@ class App:
         elif not ff.available_presets(self.tools):
             messagebox.showerror(t("dlg.error"), t("msg.no_encoder"), parent=self.root)
         else:
-            ExportDialog(self)
+            dlg = ExportDialog(self)
+            if dlg.result == "start":
+                self.jobs.start_all()
+                self.show_jobs()
+            elif dlg.result == "add":
+                self._say(t("status.job_queued", name=dlg.queued_name))
+
+    def show_jobs(self):
+        """Open the job queue window, or bring the open one to the front."""
+        if self.jobs_win is not None and self.jobs_win.winfo_exists():
+            self.jobs_win.deiconify()
+            self.jobs_win.lift()
+        else:
+            self.jobs_win = JobsWindow(self)
+
+    def _job_changed(self, job):
+        """A job was added or changed state (Tk thread): update the queue window and tell the result in the status line."""
+        if self.jobs_win is not None and self.jobs_win.winfo_exists():
+            self.jobs_win.refresh()
+        if job.state is JobState.DONE:
+            self._say(t("status.export_done", path=job.out_path))
+            self.root.bell()
+        elif job.state is JobState.FAILED:
+            self._say(t("status.export_failed", name=job.name), True)
+            self.root.bell()
 
     def save_frame_dialog(self):
         """Save the picture at the current second in full project size (PNG or JPEG)."""
