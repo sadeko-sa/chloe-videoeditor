@@ -78,6 +78,34 @@ def fmt_time(seconds):
     return "%02d:%06.3f" % (int(seconds // 60), seconds % 60)
 
 
+def fmt_stamp(seconds):
+    """@return seconds as hh.mm.ss.mmm, safe inside a file name (the time stamp style of MPC snapshots)"""
+    ms = int(round(max(seconds, 0.0) * 1000))
+    return "%02d.%02d.%02d.%03d" % (ms // 3600000, ms // 60000 % 60, ms // 1000 % 60, ms % 1000)
+
+
+def parse_time(text):
+    """
+    @param text  seconds ("90"), minutes and seconds ("1:30.5") or hours, minutes and seconds ("1:02:03.5");
+                 a comma works as the decimal point
+    @return      the time in seconds; None if the text is not a time
+    """
+    text = text.strip().replace(",", ".")
+    parts = text.split(":")
+    if not text or len(parts) > 3:
+        return None
+    seconds = 0.0
+    for part in parts:
+        try:
+            value = float(part)
+        except ValueError:
+            return None
+        if not 0.0 <= value < float("inf"):                 # also rejects nan and negative numbers
+            return None
+        seconds = seconds * 60 + value
+    return seconds
+
+
 def fmt_number(value, digits=2):
     """@return a number without useless trailing zeros"""
     text = ("%.*f" % (digits, value)).rstrip("0").rstrip(".")

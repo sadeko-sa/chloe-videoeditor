@@ -18,8 +18,8 @@ from engine.jobs import JobQueue, JobState
 from engine.preview import PreviewEngine, save_frame
 from engine.project import (PROJECT_EXT, AdjustmentLayer, EffectInstance, History, MediaLayer, Project, ProjectError,
                             even, load_project, save_project)
-from ui.common import IS_WIN, Tip, fmt_time
-from ui.dialogs import AboutDialog, ExportDialog, ProjectDialog, SettingsDialog
+from ui.common import IS_WIN, Tip, fmt_stamp, fmt_time
+from ui.dialogs import AboutDialog, ExportDialog, GotoDialog, ProjectDialog, SettingsDialog
 from ui.jobs import JobsWindow
 from ui.panels import EffectPanel, LayerPanel, PropertiesPanel
 
@@ -189,7 +189,7 @@ class App:
         file_menu.add_separator()
         add(file_menu, "menu.export", self.export_dialog, "e")
         add(file_menu, "menu.jobs", self.show_jobs, "q")
-        add(file_menu, "menu.save_frame", self.save_frame_dialog, "e", True)
+        add(file_menu, "menu.export_frame", self.export_frame_dialog, "e", True)
         file_menu.add_separator()
         add(file_menu, "menu.quit", self.quit, "w")
         edit = tk.Menu(bar, tearoff=0)
@@ -199,6 +199,8 @@ class App:
         edit.add_separator()
         add(edit, "menu.project", lambda: self.project_settings())
         add(edit, "menu.duplicate", self.duplicate_layer, "d")
+        edit.add_separator()
+        add(edit, "menu.goto", self.goto_dialog, "g")
         bar.add_cascade(label=t("menu.file"), menu=file_menu)
         bar.add_cascade(label=t("menu.edit"), menu=edit)
         # root menu "Settings": the theme (one radio entry per theme, then Edit theme), then the settings dialog
@@ -367,6 +369,12 @@ class App:
 
     def step(self, frames):
         self.set_time(self.t + frames / self.project.fps)
+
+    def goto_dialog(self):
+        """Ctrl+G: ask for a time or frame number and go there."""
+        result = GotoDialog(self).result
+        if result is not None:
+            self.set_time(result)
 
     def _scale_moved(self, raw):
         fps = self.project.fps
@@ -781,10 +789,31 @@ class App:
         """@return True if saved"""
         return self._write(self.project_path) if self.project_path else self.save_as()
 
+    def _media_stem(self):
+        """@return the file name (no folder, no extension) of the first media layer; empty if there is none"""
+        media = self.project.media_layers()
+        return os.path.splitext(os.path.basename(media[0].path))[0] if media and media[0].path else ""
+
+    def suggest_save_path(self):
+        """
+        @return (folder, file name) the save dialog starts with: the current project file if there is one, else the
+                name of the first media file (a number is added if that project file already exists), else Untitled
+        """
+        if self.project_path:
+            return os.path.dirname(self.project_path), os.path.basename(self.project_path)
+        folder = self.cfg["last_dir"] or ""
+        stem = self._media_stem() or t("title.untitled")
+        name, number = stem + PROJECT_EXT, 1
+        while folder and os.path.exists(os.path.join(folder, name)):
+            number += 1
+            name = "%s %d%s" % (stem, number, PROJECT_EXT)
+        return folder, name
+
     def save_as(self):
+        folder, name = self.suggest_save_path()
         path = filedialog.asksaveasfilename(parent=self.root, title=t("dlg.save"), defaultextension=PROJECT_EXT,
                                             filetypes=[(APP_NAME, "*" + PROJECT_EXT)],
-                                            initialdir=self.cfg["last_dir"] or None)
+                                            initialdir=folder or None, initialfile=name)
         return self._write(path) if path else False
 
     def _write(self, path):
@@ -837,23 +866,29 @@ class App:
             self._say(t("status.export_failed", name=job.name), True)
             self.root.bell()
 
-    def save_frame_dialog(self):
-        """Save the picture at the current second in full project size (PNG or JPEG)."""
+    def export_frame_dialog(self):
+        """
+        Export the picture at the current second in full project size (PNG or JPEG). The file name starts as
+        <first media file>_snapshot_<hh.mm.ss.mmm>, like the snapshots of MPC.
+        """
         if not self.tools:
             messagebox.showwarning(t("dlg.error"), t("msg.no_ffmpeg"), parent=self.root)
             return
-        path = filedialog.asksaveasfilename(parent=self.root, title=t("menu.save_frame"), defaultextension=".png",
+        stem = self._media_stem() or (os.path.splitext(os.path.basename(self.project_path))[0] if self.project_path
+                                      else "") or t("title.untitled")
+        path = filedialog.asksaveasfilename(parent=self.root, title=t("menu.export_frame"), defaultextension=".png",
                                             filetypes=[("PNG", "*.png"), ("JPEG", "*.jpg")],
-                                            initialdir=self.cfg["last_dir"] or None)
+                                            initialdir=self.cfg["last_dir"] or None,
+                                            initialfile="%s_snapshot_%s.png" % (stem, fmt_stamp(self.t)))
         if not path:
             return
         project, seconds, tools = self.project, self.t, self.tools
-        self._say(t("status.saving_frame"))
+        self._say(t("status.exporting_frame"))
 
         def work():
             try:
                 save_frame(tools, project, seconds, path)
-                message = (t("msg.frame_saved", path=path), False)
+                message = (t("msg.frame_exported", path=path), False)
             except (ff.FFmpegError, CompileError) as exc:
                 message = (t("msg.frame_failed", error=exc), True)
             self.inbox.put(lambda: self._say(*message))

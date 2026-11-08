@@ -148,8 +148,10 @@ class Shadows(Effect):
 @register
 class Highlights(Effect):
     """
-    Highlights. Per pixel: k = amount / 100 * max(r, g, b); out = 1 - (1 - k * c) * (1 - c)
-    for every channel c. Black and white stay, bright pixels move the most, hue is kept.
+    Highlights. Per pixel: m = max(r, g, b); the brightest channel follows
+    m' = 1 - (1 - a * m * m) * (1 - m) with a = amount / 100, and all three channels are scaled by the
+    same gain m' / m = 1 + a * m * (1 - m). Black and white stay, bright pixels move the most, and hue
+    and saturation are kept (a pure gain never changes the ratios between the channels).
     """
 
     id = "highlights"
@@ -164,8 +166,8 @@ class Highlights(Effect):
         """
         if not v["amount"]:
             return []
-        k = "(%s*%s)" % (num(v["amount"] / 100, 5), _MAX_OF)
-        return _geq(lambda c: "1-(1-%s*%s)*(1-%s)" % (k, _ch(c), _ch(c)))
+        gain = "(1+%s*%s*(1-%s))" % (num(v["amount"] / 100, 5), _MAX_OF, _MAX_OF)
+        return _geq(lambda c: "%s*%s" % (_ch(c), gain))
 
 
 @register

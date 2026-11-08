@@ -15,7 +15,7 @@ from engine.compiler import CompileError, compile_export
 from engine.config import PREVIEW_RANGE, config_path
 from engine.jobs import THREADS_RANGE, WORKERS_RANGE, QueueError
 from engine.project import even
-from ui.common import Dialog, buttons_row, fmt_number, ok_cancel
+from ui.common import Dialog, buttons_row, fmt_number, fmt_time, ok_cancel, parse_time
 
 
 def _int(text, lo, hi, default):
@@ -241,6 +241,71 @@ class ProjectDialog(Dialog):
             fps = None
         self.result = (even(_int(self.vars["width"].get(), 16, 16384, 1280)),
                        even(_int(self.vars["height"].get(), 16, 16384, 720)), fps)
+        self.destroy()
+
+
+class GotoDialog(Dialog):
+    """Go to an exact time or frame. The two fields follow each other; .result is the time in seconds."""
+
+    def __init__(self, app):
+        super().__init__(app.root, "dlg.goto")
+        self.fps = app.project.fps
+        self.last_frame = round(app._max_time() * self.fps)
+        self.source = "time"                                # the field the user changed last, it decides on OK
+        self._busy = False                                  # True while one field is being filled from the other
+        frm = ttk.Frame(self, padding=14)
+        frm.pack(fill="both", expand=True)
+        self.time_var = tk.StringVar(value=fmt_time(app.t))
+        self.frame_var = tk.StringVar(value=str(round(app.t * self.fps)))
+        ttk.Label(frm, text=t("field.time")).grid(row=0, column=0, sticky="w", pady=4)
+        self.time_entry = ttk.Entry(frm, textvariable=self.time_var, width=14)
+        self.time_entry.grid(row=0, column=1, padx=(12, 0))
+        ttk.Label(frm, text=t("field.frame")).grid(row=1, column=0, sticky="w", pady=4)
+        ttk.Entry(frm, textvariable=self.frame_var, width=14).grid(row=1, column=1, padx=(12, 0))
+        hint = t("hint.goto", last=self.last_frame, time=fmt_time(self.last_frame / self.fps))
+        ttk.Label(frm, text=hint, wraplength=280, justify="left").grid(
+            row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        ok_cancel(frm, self._ok, self.destroy).grid(row=3, column=0, columnspan=2, sticky="we", pady=(12, 0))
+        self.time_var.trace_add("write", lambda *a: self._follow("time"))
+        self.frame_var.trace_add("write", lambda *a: self._follow("frame"))
+        self.time_entry.selection_range(0, "end")
+        self.show(self.time_entry, self._ok)
+
+    def _frame_of(self, text):
+        """@return frame number (limited to the picture range) of the text of the Frame field; None if unusable"""
+        try:
+            return min(max(int(float(text)), 0), self.last_frame)
+        except (ValueError, OverflowError):
+            return None
+
+    def _follow(self, source):
+        """The field `source` was edited: show the same position in the other field (if the text is usable)."""
+        if self._busy:
+            return
+        self.source = source
+        self._busy = True
+        try:
+            if source == "time":
+                seconds = parse_time(self.time_var.get())
+                if seconds is not None:
+                    self.frame_var.set(str(min(round(seconds * self.fps), self.last_frame)))
+            else:
+                frame = self._frame_of(self.frame_var.get())
+                if frame is not None:
+                    self.time_var.set(fmt_time(frame / self.fps))
+        finally:
+            self._busy = False
+
+    def _ok(self):
+        if self.source == "time":
+            seconds = parse_time(self.time_var.get())
+        else:
+            frame = self._frame_of(self.frame_var.get())
+            seconds = None if frame is None else frame / self.fps
+        if seconds is None:
+            self.bell()                                     # not a time / frame: stay open so it can be fixed
+            return
+        self.result = seconds
         self.destroy()
 
 
