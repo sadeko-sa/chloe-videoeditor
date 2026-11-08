@@ -1,6 +1,5 @@
 # Chloe Videoeditor
 Small cross platform video editor (Windows, Linux, macOS) in Python / Tkinter. All picture and sound processing is done by FFmpeg.
-Version 1.3.0.
 
 ## Install and run
 
