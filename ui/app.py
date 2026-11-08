@@ -1,5 +1,6 @@
 """ui/app.py - The main window: wires the panels, the project model, undo and the preview together."""
 
+import math
 import os
 import queue
 import sys
@@ -51,6 +52,9 @@ class App:
         self._missing = set()                       # ids of the media layers whose file does not exist
         self.t, self._seq, self._job, self._img = 0.0, 0, None, None
         self._time_lock, self.compare = False, False
+        self.zoom, self.cx, self.cy = None, 0.0, 0.0    # preview zoom: None = fit, else screen px per project px; cx, cy = centre in project px
+        self._drag, self._view_req = None, None
+        self._fit, self._shown, self._interim_img = None, None, None   # (image, x0, y0, scale) of the last fit / last shown picture
         self.inbox = queue.Queue()                  # functions from worker threads, run in the Tk thread
         self.tools = ff.locate(cfg["ffmpeg"])
         self.engine = PreviewEngine(self.tools, lambda seq, path, err: self.inbox.put(
@@ -124,8 +128,16 @@ class App:
 
         self.canvas = tk.Canvas(centre, bg=self.col_bg, highlightthickness=0, width=480, height=300)
         self.canvas.pack(fill="both", expand=True)
-        self.canvas.bind("<Configure>", lambda e: self.request_preview(200))
-        self.canvas.bind("<Button-1>", lambda e: self.canvas.focus_set())
+        self.canvas.bind("<Configure>", self._view_configure)
+        self.canvas.bind("<ButtonPress-1>", self._view_press)
+        self.canvas.bind("<B1-Motion>", self._view_drag)
+        self.canvas.bind("<ButtonRelease-1>", self._view_release)
+        self.canvas.bind("<MouseWheel>", self._view_wheel)                  # Windows, macOS
+        self.canvas.bind("<Button-4>", lambda e: self._view_wheel(e, 1))    # Linux
+        self.canvas.bind("<Button-5>", lambda e: self._view_wheel(e, -1))
+        self.canvas.bind("<Button-3>", self._view_menu)
+        if IS_MAC:
+            self.canvas.bind("<Button-2>", self._view_menu)                 # Tk on macOS: 2 = right button
         self.status = ttk.Label(centre, text="")
         self.status.pack(fill="x", pady=(4, 0))
         bar = ttk.Frame(centre)
@@ -224,6 +236,12 @@ class App:
         root.config(menu=bar)
         self._fill_recent()
         self._fill_themes()
+        # preview zoom, like Photoshop: Ctrl+0 fit, Ctrl+1 100%, Ctrl + / - step
+        for sym, command in (("0", self.zoom_fit), ("1", lambda: self.zoom_to(1.0)),
+                             ("plus", lambda: self.zoom_step(1)), ("equal", lambda: self.zoom_step(1)),
+                             ("KP_Add", lambda: self.zoom_step(1)), ("minus", lambda: self.zoom_step(-1)),
+                             ("KP_Subtract", lambda: self.zoom_step(-1))):
+            root.bind("<%s-%s>" % (mod, sym), lambda e, f=command: self._key(f))
 
     def _fill_themes(self):
         """Rebuild the Settings > Theme submenu: the themes of theme/ as radio entries, then Edit theme."""
@@ -384,6 +402,207 @@ class App:
             self._time_text()
             self.request_preview()
 
+    # ------------------------------------------------------------------ #
+    # Preview zoom and pan
+    #   left drag = move, Ctrl + left drag (left / right) = zoom, wheel = zoom, double click = fit / 100%,
+    #   Ctrl+0 fit, Ctrl+1 100%, Ctrl +/- step, right click = menu.
+    # ------------------------------------------------------------------ #
+
+    ZOOM_STEPS = (0.0625, 0.125, 0.25, 1 / 3.0, 0.5, 2 / 3.0, 1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0)
+    MAX_ZOOM = 16.0
+
+    def _canvas_size(self):
+        return max(self.canvas.winfo_width(), 64), max(self.canvas.winfo_height(), 64)
+
+    def _min_zoom(self):
+        """Scale of the fitted picture (the smallest zoom)."""
+        return self.preview_size()[0] / float(self.project.width)
+
+    def _state(self):
+        """@return (zoom, centre x, centre y) of the view now; the fitted picture counts as the lowest zoom"""
+        p = self.project
+        if self.zoom is None:
+            return self._min_zoom(), p.width / 2.0, p.height / 2.0
+        return self.zoom, self.cx, self.cy
+
+    def _clamp_view(self):
+        """Keep the picture in view; on an axis where it is smaller than the area it stays centred."""
+        p, (cw, ch) = self.project, self._canvas_size()
+        hw, hh = cw / (2.0 * self.zoom), ch / (2.0 * self.zoom)
+        self.cx = p.width / 2.0 if p.width <= 2 * hw else min(max(self.cx, hw), p.width - hw)
+        self.cy = p.height / 2.0 if p.height <= 2 * hh else min(max(self.cy, hh), p.height - hh)
+
+    def _sanitize_view(self):
+        """Back to fit if the zoom is not above fit any more (window got bigger, project size changed)."""
+        if self.zoom is not None:
+            if self.zoom <= self._min_zoom() * 1.001:
+                self.zoom = None
+            else:
+                self._clamp_view()
+            self._apply_cursor()
+            self._draw_badge()
+
+    def _view_request(self):
+        """@return (size of the whole frame to render, (x, y, w, h, zoom) = the visible part in project pixels)"""
+        p, (cw, ch), z = self.project, self._canvas_size(), self.zoom
+        self._clamp_view()
+        hw, hh = cw / (2.0 * z) * 1.5, ch / (2.0 * z) * 1.5                 # a margin around the view: small moves need no new render
+        x0, x1 = max(0, int(math.floor(self.cx - hw))), min(p.width, int(math.ceil(self.cx + hw)))
+        y0, y1 = max(0, int(math.floor(self.cy - hh))), min(p.height, int(math.ceil(self.cy + hh)))
+        return (even(p.width), even(p.height)), (x0, y0, max(1, x1 - x0), max(1, y1 - y0), z)
+
+    def zoom_to(self, z, ax=None, ay=None, base=None):
+        """
+        Zoom to z; the picture point under the canvas point (ax, ay) stays where it is (default: the middle).
+
+        @param base  (zoom, cx, cy) to calculate from (a drag keeps the state it started with), default the view now
+        """
+        cw, ch = self._canvas_size()
+        ax, ay = (cw / 2.0, ch / 2.0) if ax is None else (ax, ay)
+        z0, cx0, cy0 = base or self._state()
+        z = min(max(z, self._min_zoom()), self.MAX_ZOOM)
+        if z <= self._min_zoom() * 1.001:
+            self.zoom = None
+        else:
+            px, py = cx0 + (ax - cw / 2.0) / z0, cy0 + (ay - ch / 2.0) / z0   # picture point under the pointer
+            self.zoom = z
+            self.cx, self.cy = px - (ax - cw / 2.0) / z, py - (ay - ch / 2.0) / z
+            self._clamp_view()
+        self._apply_cursor()
+        self._show_interim()
+        self._draw_badge()
+        self.request_preview(30)
+
+    def zoom_fit(self):
+        self.zoom = None
+        self._apply_cursor()
+        self._show_interim()
+        self._draw_badge()
+        self.request_preview(0)
+
+    def zoom_step(self, direction):
+        """Next zoom level up (+1) or down (-1): 6.25 ... 100, 200 ... 1600 %."""
+        z, low = self._state()[0], self._min_zoom()
+        steps = sorted(set(self.ZOOM_STEPS) | {low})
+        if direction > 0:
+            self.zoom_to(next((s for s in steps if s > z * 1.001), self.MAX_ZOOM))
+        else:
+            below = [s for s in steps if s < z / 1.001]
+            self.zoom_to(below[-1] if below else low)
+
+    def _apply_cursor(self, zooming=False):
+        self.canvas.configure(cursor="sb_h_double_arrow" if zooming else ("fleur" if self.zoom is not None else ""))
+
+    def _show_interim(self):
+        """
+        Show the new view AT ONCE from a picture that is already there (the last one shown, or the fitted one),
+        when it has the same scale (fit, or moving around); other scales come smooth from the engine.
+        """
+        z, cx, cy = self._state()
+        cw, ch = self._canvas_size()
+        hw, hh = cw / (2.0 * z), ch / (2.0 * z)
+        best, best_area = None, 0.0
+        for src in (self._shown, self._fit):                # first: the last shown one (sharper); the fit one covers all
+            if not src:
+                continue
+            img, x0, y0, zs = src
+            if abs(z / zs - 1.0) > 0.01:
+                continue                                    # other scale: no blocky stretching, the engine sends a smooth picture
+            ix0, ix1 = max(cx - hw, x0), min(cx + hw, x0 + img.width() / zs)
+            iy0, iy1 = max(cy - hh, y0), min(cy + hh, y0 + img.height() / zs)
+            area = max(0.0, ix1 - ix0) * max(0.0, iy1 - iy0)
+            if area > 0 and (best is None or area > best_area * 1.02):
+                best, best_area = (src, ix0, ix1, iy0, iy1), area
+        if best is None:
+            return
+        (img, x0, y0, zs), ix0, ix1, iy0, iy1 = best
+        u0, u1 = max(0, int(math.floor((ix0 - x0) * zs))), min(img.width(), int(math.ceil((ix1 - x0) * zs)))
+        v0, v1 = max(0, int(math.floor((iy0 - y0) * zs))), min(img.height(), int(math.ceil((iy1 - y0) * zs)))
+        if u1 <= u0 or v1 <= v0:
+            return
+        out = tk.PhotoImage()
+        out.tk.call(out.name, "copy", img.name, "-from", u0, v0, u1, v1)
+        # centre of the cut-out on the screen (exact), the picture is placed around it
+        mx, my = cw / 2.0 + ((u0 + u1) / 2.0 / zs + x0 - cx) * z, ch / 2.0 + ((v0 + v1) / 2.0 / zs + y0 - cy) * z
+        self.canvas.delete("frame")
+        self.canvas.create_image(mx, my, image=out, tags="frame")
+        self._interim_img = out
+        self.canvas.tag_raise("badge")
+
+    def _draw_badge(self):
+        """The zoom level in the corner while zoomed; a click on it goes back to fit."""
+        self.canvas.delete("badge")
+        text = self.canvas.create_text(16, 12, text="%d%%" % round(self._state()[0] * 100), anchor="nw",
+                                       fill=self.col_info, tags="badge")
+        x0, y0, x1, y1 = self.canvas.bbox(text)
+        box = self.canvas.create_rectangle(x0 - 6, y0 - 3, x1 + 6, y1 + 3, fill=self.col_bg, outline=self.col_info,
+                                           tags="badge")
+        self.canvas.tag_lower(box, text)
+
+    def _view_configure(self, _event):
+        self._sanitize_view()
+        self.request_preview(200)
+
+    def _view_press(self, event):
+        self.canvas.focus_set()
+        if "badge" in self.canvas.gettags("current"):
+            self._drag = None
+            self.zoom_fit()
+            return
+        ctrl = bool(event.state & 0x4) or (IS_MAC and bool(event.state & 0x8))   # Ctrl, or Cmd on macOS
+        self._drag = {"x": event.x, "y": event.y, "lx": event.x, "ly": event.y, "zoom": ctrl, "base": self._state()}
+        if ctrl:
+            self._apply_cursor(True)
+
+    def _view_drag(self, event):
+        d = self._drag
+        if not d:
+            return
+        if d["zoom"]:                                   # Ctrl + drag right = zoom in, left = zoom out, around the press point
+            self.zoom_to(d["base"][0] * math.exp((event.x - d["x"]) * 0.006), d["x"], d["y"], d["base"])
+            self._apply_cursor(True)
+        elif self.zoom is not None:                     # plain drag = move the picture
+            ox, oy, z = self.cx, self.cy, self.zoom
+            self.cx -= (event.x - d["lx"]) / z
+            self.cy -= (event.y - d["ly"]) / z
+            self._clamp_view()
+            self._show_interim()                        # at once; the sharp picture follows
+            self.request_preview(60)
+        d["lx"], d["ly"] = event.x, event.y
+
+    def _view_release(self, _event):
+        if self._drag:
+            self._drag = None
+            self._apply_cursor()
+            if self.zoom is not None:
+                self.request_preview(0)
+
+    def _view_wheel(self, event, direction=None):
+        if direction is None:
+            direction = 1 if event.delta > 0 else -1
+        self.zoom_to(self._state()[0] * 1.25 ** direction, event.x, event.y)
+        return "break"
+
+    def _view_menu(self, event):
+        """Right click menu."""
+        label = "Cmd" if IS_MAC else "Ctrl"
+        menu = tk.Menu(self.root, tearoff=0)
+        menu.add_command(label=t("view.fit"), accelerator=label + "+0", command=self.zoom_fit)
+        for percent in (50, 100, 200, 400, 800):
+            menu.add_command(label="%d%%" % percent, accelerator=label + "+1" if percent == 100 else "",
+                             command=lambda z=percent / 100.0: self.zoom_to(z))
+        menu.add_separator()
+        menu.add_command(label=t("view.zoom_in"), accelerator=label + "++", command=lambda: self.zoom_step(1))
+        menu.add_command(label=t("view.zoom_out"), accelerator=label + "+-", command=lambda: self.zoom_step(-1))
+        menu.add_separator()
+        menu.add_command(label=t("menu.goto"), accelerator=label + "+G", command=self.goto_dialog)
+        menu.add_command(label=t("menu.export_frame"), accelerator=label + "+Shift+E", command=self.export_frame_dialog)
+        menu.add_command(label=t("menu.project"), command=lambda: self.project_settings())
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
     def preview_size(self):
         """@return (width, height) of the preview picture: the frame fitted into the area, never above the project size"""
         p = self.project
@@ -408,7 +627,13 @@ class App:
         if not self.tools:
             self._say(t("msg.no_ffmpeg_short"), True)
             return
-        self._seq = self.engine.request(self.project, self.t, self.preview_size(), self.sel_layer, self.compare)
+        self._sanitize_view()
+        size, view = self.preview_size(), None
+        if self.zoom is not None:
+            size, view = self._view_request()
+        self._view_req = view
+        self.engine.fit_size = self.preview_size()      # the picture the engine makes the quick preview of a zoom from
+        self._seq = self.engine.request(self.project, self.t, size, self.sel_layer, self.compare, view)
 
     def _say(self, text, error=False):
         self.status.configure(text=text, foreground=self.col_err if error else self.col_info)
@@ -425,9 +650,20 @@ class App:
             self._say(str(exc), True)
             return
         self._say(t("status.original") if self.compare else "")
-        self.canvas.delete("frame")
-        self.canvas.create_image(self.canvas.winfo_width() // 2, self.canvas.winfo_height() // 2,
-                                 image=self._img, tags="frame")
+        cw, ch = self._canvas_size()
+        if self.zoom is None and self._view_req is None:                    # fit: the whole frame, centred
+            self.canvas.delete("frame")
+            self.canvas.create_image(self.canvas.winfo_width() // 2, self.canvas.winfo_height() // 2,
+                                     image=self._img, tags="frame")
+            self._fit = self._shown = (self._img, 0.0, 0.0, self._img.width() / float(self.project.width))
+        elif self.zoom is not None and self._view_req is not None and abs(self._view_req[4] - self.zoom) < 1e-9:
+            x0, y0, _w, _h, z = self._view_req                              # zoomed: part of the frame, placed by the
+            self.canvas.delete("frame")                                     # CURRENT centre (it may have moved since)
+            self.canvas.create_image(cw / 2.0 + (x0 - self.cx) * z, ch / 2.0 + (y0 - self.cy) * z,
+                                     image=self._img, anchor="nw", tags="frame")
+            self._shown = (self._img, x0, y0, z)
+        # else: the view changed since this picture was asked for; the newer one is on its way
+        self._draw_badge()
         self.canvas.delete("hint")
         if not self.project.layers:
             self.canvas.create_text(self.canvas.winfo_width() // 2, self.canvas.winfo_height() // 2,
@@ -616,6 +852,8 @@ class App:
         if result:
             width, height, fps = result
             self.project.width, self.project.height = width, height
+            self.zoom = None
+            self._apply_cursor()
             if fps:
                 self.project.fps = fps
             self.touch()
@@ -705,6 +943,8 @@ class App:
         self.saved_state = self.history.current
         self.sel_layer = self.sel_effect = None
         self.t = 0.0
+        self.zoom = None
+        self._apply_cursor()
         self.refresh_all()
         self.update_title()
         self.update_time_range()
