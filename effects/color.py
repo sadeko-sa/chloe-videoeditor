@@ -1,9 +1,8 @@
 """
 Color and tone adjustments. All of them are neutral at their default and then add no filter.
 
-Every effect here follows the maths of the matching Filmora adjustment (all sliders -100..100,
-0 = neutral), so the same slider value gives the same picture. Effects that only look at the
-channel itself use lutrgb (fast, exact); effects that need the other channels of the pixel
+Every effect here uses sliders from -100 to 100 with 0 = neutral, so the same slider value
+gives the same picture. Effects that only look at the channel itself use lutrgb (fast, exact); effects that need the other channels of the pixel
 (highlights, saturation, vibrance, black level) use geq on RGB planes.
 """
 
@@ -58,7 +57,7 @@ def _ch(c):
 
 @register
 class Brightness(Effect):
-    """Filmora brightness: positive multiplies the picture, negative subtracts a lift."""
+    """Brightness: positive multiplies the picture, negative subtracts a lift."""
 
     id = "brightness"
     name = "Brightness"
@@ -81,7 +80,7 @@ class Brightness(Effect):
 
 @register
 class Contrast(Effect):
-    """Filmora contrast: an S curve around 0.5 made of a power law on each half."""
+    """Contrast: an S curve around 0.5 made of a power law on each half."""
 
     id = "contrast"
     name = "Contrast"
@@ -104,7 +103,7 @@ class Contrast(Effect):
 
 @register
 class Exposure(Effect):
-    """Filmora exposure: negative scales by 2^(amount*0.02353); positive lifts the dark parts more."""
+    """Exposure: negative scales by 2^(amount*0.02353); positive lifts the dark parts more."""
 
     id = "exposure"
     name = "Exposure"
@@ -127,7 +126,7 @@ class Exposure(Effect):
 
 @register
 class Shadows(Effect):
-    """Filmora shadows: a gamma on every channel (power 1 - 0.004*amount up, 1 - 0.006*amount down)."""
+    """Shadows: a gamma on every channel (power 1 - 0.004*amount up, 1 - 0.006*amount down)."""
 
     id = "shadows"
     name = "Shadows"
@@ -149,7 +148,7 @@ class Shadows(Effect):
 @register
 class Highlights(Effect):
     """
-    Filmora highlights. Per pixel: k = amount / 100 * max(r, g, b); out = 1 - (1 - k * c) * (1 - c)
+    Highlights. Per pixel: k = amount / 100 * max(r, g, b); out = 1 - (1 - k * c) * (1 - c)
     for every channel c. Black and white stay, bright pixels move the most, hue is kept.
     """
 
@@ -171,7 +170,7 @@ class Highlights(Effect):
 
 @register
 class BlackLevel(Effect):
-    """Filmora black level: positive lifts the darkest pixels (screen blend), negative crushes them."""
+    """Black level: positive lifts the darkest pixels (screen blend), negative crushes them."""
 
     id = "black_level"
     name = "Black level"
@@ -195,7 +194,7 @@ class BlackLevel(Effect):
 
 @register
 class WhiteLevel(Effect):
-    """Filmora white level: scales the picture by 1 + 0.0035*amount (up) or 1 + 0.0025*amount (down)."""
+    """White level: scales the picture by 1 + 0.0035*amount (up) or 1 + 0.0025*amount (down)."""
 
     id = "white_level"
     name = "White level"
@@ -216,7 +215,7 @@ class WhiteLevel(Effect):
 @register
 class Saturation(Effect):
     """
-    Filmora saturation: pushes every channel away from a luma gray. A boost is weaker on pixels
+    Saturation: pushes every channel away from a luma gray. A boost is weaker on pixels
     that are already saturated; a cut applies to all colored pixels equally. Gray pixels stay.
     """
 
@@ -246,7 +245,7 @@ class Saturation(Effect):
 @register
 class Vibrance(Effect):
     """
-    Filmora vibrance: moves every channel toward (negative) or away from (positive) the brightest
+    Vibrance: moves every channel toward (negative) or away from (positive) the brightest
     channel, weighted so dull colors change more than vivid ones.
     """
 
@@ -279,17 +278,17 @@ class Vibrance(Effect):
 
 _HSL_BANDS = (("red", "Red", 0.3), ("orange", "Orange", 0.2), ("yellow", "Yellow", 0.2), ("green", "Green", 0.4),
               ("magenta", "Magenta", 0.4), ("purple", "Purple", 0.4), ("blue", "Blue", 0.4), ("aqua", "Aqua", 0.4))
-"""Filmora HSL bands in processing order: key, English name, degrees of hue shift per slider unit."""
+"""HSL bands in processing order: key, English name, degrees of hue shift per slider unit."""
 
 _HSL_RANGES = {"red": (315, 45), "orange": (0, 60), "yellow": (15, 105), "green": (75, 165), "magenta": (255, 345),
                "purple": (240, 300), "blue": (195, 285), "aqua": (135, 225)}
-"""Filmora hue range (start, end) in degrees of every band; red wraps around 360."""
+"""Hue range (start, end) in degrees of every band; red wraps around 360."""
 
 
 def _rgb_to_hsl_statements():
     """
     @return geq statements that turn the pixel into hue (degrees, slot 0), saturation (slot 1) and
-            lightness (slot 2) with the HSL model Filmora uses
+            lightness (slot 2) with the HSL model
     """
     d = "max(ld(3)-ld(4),0.000001)"
     r, g, b = _ch("r"), _ch("g"), _ch("b")
@@ -302,7 +301,7 @@ def _rgb_to_hsl_statements():
 
 def _hsl_band_statements(key, hue, sat, lum):
     """
-    One band of the Filmora HSL adjustment as geq statements working on slots 0 (hue), 1 (saturation)
+    One band of the HSL adjustment as geq statements working on slots 0 (hue), 1 (saturation)
     and 2 (lightness). Pixels outside the band's hue range are left as they are.
 
     @param key  band key (red, orange, ...)
@@ -351,7 +350,7 @@ def _hsl_back_statements(c):
 @register
 class HSL(Effect):
     """
-    Filmora HSL: hue, saturation and brightness for each of eight color bands (red, orange, yellow,
+    HSL: hue, saturation and brightness for each of eight color bands (red, orange, yellow,
     green, magenta, purple, blue, aqua), all -100..100. A band affects pixels whose hue lies in its
     range and fades out toward the range edges; saturated pixels change most.
     """
@@ -394,7 +393,7 @@ def _hsl_value():
 
 @register
 class WhiteBalance(Effect):
-    """Filmora temperature and tint: a gain per channel (red/blue by temperature, green/magenta by tint)."""
+    """Temperature and tint: a gain per channel (red/blue by temperature, green/magenta by tint)."""
 
     id = "white_balance"
     name = "White balance"
@@ -416,7 +415,7 @@ class WhiteBalance(Effect):
 
 @register
 class Hue(Effect):
-    """Hue rotation (Filmora has no plain hue slider, so this stays the FFmpeg hue filter)."""
+    """Hue rotation, done with the FFmpeg hue filter."""
 
     id = "hue"
     name = "Hue"

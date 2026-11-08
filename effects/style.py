@@ -7,7 +7,7 @@ from engine.effect import Effect, Param, num, quote, register
 
 def _mask(width, height, size, feather, roundness):
     """
-    Builds the Filmora vignette mask (1 inside the clear ellipse, 0 outside the feather band, a
+    Builds the vignette mask (1 inside the clear ellipse, 0 outside the feather band, a
     cosine ramp between) as geq text that stores dx in slot 0, dy in slot 1 and the mask in slot 2.
 
     @param width      picture width in pixels
@@ -39,7 +39,7 @@ def _mask(width, height, size, feather, roundness):
 @register
 class Vignette(Effect):
     """
-    Filmora vignette. The picture inside the ellipse is scaled by the exposure factor, the outside
+    Vignette. The picture inside the ellipse is scaled by the exposure factor, the outside
     by 1 + amount (negative = darker edges), with a feathered cosine transition; in the transition
     the highlights slider pulls the tones toward white or black.
     """
