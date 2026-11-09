@@ -1121,10 +1121,10 @@ class App:
         name = os.path.basename(media[0].path) if media and media[0].path else ""
         name = name or (os.path.splitext(os.path.basename(self.project_path))[0] if self.project_path
                         else "") or t("title.untitled")
-        path = filedialog.asksaveasfilename(parent=self.root, title=t("menu.export_frame"), defaultextension=".png",
-                                            filetypes=[("PNG", "*.png"), ("JPEG", "*.jpg")],
+        path = filedialog.asksaveasfilename(parent=self.root, title=t("menu.export_frame"), defaultextension=".jpg",
+                                            filetypes=[("JPEG", "*.jpg"), ("PNG", "*.png")],
                                             initialdir=self.cfg["last_dir"] or None,
-                                            initialfile=fmt_frame_name(name, self.t, self.project.fps, datetime.datetime.now()) + ".png")
+                                            initialfile=fmt_frame_name(name, self.t, self.project.fps, datetime.datetime.now()) + ".jpg")
         if not path:
             return
         project, seconds, tools = self.project, self.t, self.tools

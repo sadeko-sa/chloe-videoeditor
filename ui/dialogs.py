@@ -249,6 +249,7 @@ class GotoDialog(Dialog):
 
     def __init__(self, app):
         super().__init__(app.root, "dlg.goto")
+        self.app = app
         self.fps = app.project.fps
         self.last_frame = round(app._max_time() * self.fps)
         self.source = "time"                                # the field the user changed last, it decides on OK
@@ -261,15 +262,26 @@ class GotoDialog(Dialog):
         self.time_entry = ttk.Entry(frm, textvariable=self.time_var, width=14)
         self.time_entry.grid(row=0, column=1, padx=(12, 0))
         ttk.Label(frm, text=t("field.frame")).grid(row=1, column=0, sticky="w", pady=4)
-        ttk.Entry(frm, textvariable=self.frame_var, width=14).grid(row=1, column=1, padx=(12, 0))
+        self.frame_entry = ttk.Entry(frm, textvariable=self.frame_var, width=14)
+        self.frame_entry.grid(row=1, column=1, padx=(12, 0))
         hint = t("hint.goto", last=self.last_frame, time=fmt_time(self.last_frame / self.fps))
         ttk.Label(frm, text=hint, wraplength=280, justify="left").grid(
             row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
         ok_cancel(frm, self._ok, self.destroy).grid(row=3, column=0, columnspan=2, sticky="we", pady=(12, 0))
         self.time_var.trace_add("write", lambda *a: self._follow("time"))
         self.frame_var.trace_add("write", lambda *a: self._follow("frame"))
-        self.time_entry.selection_range(0, "end")
-        self.show(self.time_entry, self._ok)
+        entries = {"time": self.time_entry, "frame": self.frame_entry}
+        self.field = "time"                                 # the field that had the focus last
+        for name, entry in entries.items():
+            entry.bind("<FocusIn>", lambda e, name=name: setattr(self, "field", name))
+        self.bind("<Destroy>", lambda e: self._remember() if e.widget is self else None)
+        focus = entries[app.cfg["goto_field"]]
+        focus.selection_range(0, "end")
+        self.show(focus, self._ok)
+
+    def _remember(self):
+        """Keep the field that had the focus for the next time."""
+        self.app.cfg["goto_field"] = self.field
 
     def _frame_of(self, text):
         """@return frame number (limited to the picture range) of the text of the Frame field; None if unusable"""
