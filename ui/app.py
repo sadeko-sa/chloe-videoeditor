@@ -1,5 +1,6 @@
 """ui/app.py - The main window: wires the panels, the project model, undo and the preview together."""
 
+import datetime
 import math
 import os
 import queue
@@ -19,7 +20,7 @@ from engine.jobs import JobQueue, JobState
 from engine.preview import PreviewEngine, save_frame
 from engine.project import (PROJECT_EXT, AdjustmentLayer, EffectInstance, History, MediaLayer, Project, ProjectError,
                             even, load_project, save_project)
-from ui.common import IS_WIN, Tip, fmt_stamp, fmt_time
+from ui.common import IS_WIN, Tip, fmt_frame_name, fmt_time
 from ui.dialogs import AboutDialog, ExportDialog, GotoDialog, ProjectDialog, SettingsDialog
 from ui.jobs import JobsWindow
 from ui.panels import EffectPanel, LayerPanel, PropertiesPanel
@@ -1111,17 +1112,19 @@ class App:
     def export_frame_dialog(self):
         """
         Export the picture at the current second in full project size (PNG or JPEG). The file name starts as
-        <first media file>_snapshot_<hh.mm.ss.mmm>, like the snapshots of MPC.
+        <first media file>-[<date>-<time>]-<position>-<frame number>-, see fmt_frame_name.
         """
         if not self.tools:
             messagebox.showwarning(t("dlg.error"), t("msg.no_ffmpeg"), parent=self.root)
             return
-        stem = self._media_stem() or (os.path.splitext(os.path.basename(self.project_path))[0] if self.project_path
-                                      else "") or t("title.untitled")
+        media = self.project.media_layers()
+        name = os.path.basename(media[0].path) if media and media[0].path else ""
+        name = name or (os.path.splitext(os.path.basename(self.project_path))[0] if self.project_path
+                        else "") or t("title.untitled")
         path = filedialog.asksaveasfilename(parent=self.root, title=t("menu.export_frame"), defaultextension=".png",
                                             filetypes=[("PNG", "*.png"), ("JPEG", "*.jpg")],
                                             initialdir=self.cfg["last_dir"] or None,
-                                            initialfile="%s_snapshot_%s.png" % (stem, fmt_stamp(self.t)))
+                                            initialfile=fmt_frame_name(name, self.t, self.project.fps, datetime.datetime.now()) + ".png")
         if not path:
             return
         project, seconds, tools = self.project, self.t, self.tools

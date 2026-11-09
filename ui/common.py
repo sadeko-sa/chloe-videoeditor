@@ -78,10 +78,20 @@ def fmt_time(seconds):
     return "%02d:%06.3f" % (int(seconds // 60), seconds % 60)
 
 
-def fmt_stamp(seconds):
-    """@return seconds as hh.mm.ss.mmm, safe inside a file name (the time stamp style of MPC snapshots)"""
-    ms = int(round(max(seconds, 0.0) * 1000))
-    return "%02d.%02d.%02d.%03d" % (ms // 3600000, ms // 60000 % 60, ms // 1000 % 60, ms % 1000)
+def fmt_frame_name(media_name, seconds, fps, now):
+    """
+    @param media_name  file name of the video, with extension
+    @param seconds     position of the frame in the video
+    @param fps         frame rate of the project
+    @param now         datetime of the export
+    @return            <media_name>-[yyyy.mm.dd-hh.mm.ss]-<mm.ss>-<frame number>- (hh. is added to the position from
+                       one hour on)
+    """
+    total = int(max(seconds, 0.0))
+    position = "%02d.%02d" % (total // 60 % 60, total % 60)
+    if total >= 3600:
+        position = "%02d.%s" % (total // 3600, position)
+    return "%s-[%s]-%s-%d-" % (media_name, now.strftime("%Y.%m.%d-%H.%M.%S"), position, round(seconds * fps))
 
 
 def parse_time(text):
