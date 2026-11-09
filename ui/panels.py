@@ -254,12 +254,12 @@ class EffectPanel(ttk.LabelFrame):
         bar.pack(fill="x")
         self.add_btn = ttk.Button(bar, text=t("btn.add_effect") + " \u25BE", command=self._add_menu)
         self.add_btn.pack(side="left")
-        for text, tip, cmd in (("\u25B2", "tip.effect_up", lambda: app.move_effect(1)),      # up = applied later
-                               ("\u25BC", "tip.effect_down", lambda: app.move_effect(-1)),    # down = applied earlier
-                               ("\u2715", "tip.effect_remove", app.remove_effect)):
-            btn = ttk.Button(bar, text=text, width=3, command=cmd)
-            btn.pack(side="left", padx=(4, 0))
-            Tip(btn, tip)
+        for text, cmd in (("\u25B2", lambda: app.move_effect(1)),      # up = applied later
+                          ("\u25BC", lambda: app.move_effect(-1))):   # down = applied earlier
+            ttk.Button(bar, text=text, width=3, command=cmd).pack(side="left", padx=(4, 0))
+        remove = ttk.Button(bar, text="\u2715", width=3, command=app.remove_effect)
+        remove.pack(side="left", padx=(4, 0))
+        Tip(remove, "tip.effect_remove")
         box = ttk.Frame(self)                       # holds the list and its scrollbar side by side
         box.pack(fill="x", pady=6)
         # show="" = no header row and no tree column: the group is already called "Effects", so a header

@@ -80,8 +80,6 @@
   "tip.layer_down": "Move layer down",
   "tip.layer_duplicate": "Duplicate layer",
   "tip.layer_remove": "Remove layer",
-  "tip.effect_up": "Apply earlier",
-  "tip.effect_down": "Apply later",
   "tip.effect_remove": "Remove effect",
   "tip.prev_frame": "Previous frame",
   "tip.next_frame": "Next frame",

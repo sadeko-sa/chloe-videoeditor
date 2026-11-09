@@ -80,8 +80,6 @@
   "tip.layer_down": "レイヤーを下へ",
   "tip.layer_duplicate": "レイヤーを複製",
   "tip.layer_remove": "レイヤーを削除",
-  "tip.effect_up": "先に適用",
-  "tip.effect_down": "後に適用",
   "tip.effect_remove": "エフェクトを削除",
   "tip.prev_frame": "前のフレーム",
   "tip.next_frame": "次のフレーム",
