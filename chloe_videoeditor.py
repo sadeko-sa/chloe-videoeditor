@@ -5,7 +5,7 @@ that uses FFmpeg for all picture and sound processing. Needs Python 3.8+, Tkinte
 
     python chloe_videoeditor.py [project (.cvproj), video or image]
 
-See README.md. Effects are plugins in the effects/ folder, texts in lang/, colors in theme/.
+See README.md. Effects are plugins in the effect/ folder, texts in lang/, colors in theme/.
 """
 
 import sys

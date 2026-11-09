@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-chloe_lang.py - Program text for the Chloe programs (and chloe_theme.py).
+lang.py - Program text for the Chloe programs (and theme.py).
 
 All text the user sees (menus, buttons, column headings, dialogs,
 status texts, color descriptions) lives in lang/<code>.json next to this script.

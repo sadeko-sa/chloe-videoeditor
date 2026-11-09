@@ -140,7 +140,7 @@
   "msg.overwrite": "{name} exists. Replace it?",
   "msg.frame_exported": "Frame exported: {path}",
   "msg.frame_failed": "Could not export the frame: {error}",
-  "msg.effect_missing": "The effect \"{id}\" is not installed (its file is missing from the effects folder). It is skipped.",
+  "msg.effect_missing": "The effect \"{id}\" is not installed (its file is missing from the effect folder). It is skipped.",
   "about.description": "Small cross platform video editor. Layers, adjustment layers and effects are compiled into one FFmpeg filter graph; the preview renders a single frame.",
   "about.ffmpeg": "FFmpeg",
   "about.missing": "not found",

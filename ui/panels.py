@@ -3,7 +3,7 @@
 import tkinter as tk
 from tkinter import ttk
 
-from chloe_lang import t
+from lang import t
 
 from engine import effect as fx
 from engine.project import FITS, MediaLayer

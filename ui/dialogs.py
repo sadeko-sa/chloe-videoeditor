@@ -5,8 +5,8 @@ import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from chloe_lang import list_languages, resolve_language, t
-from chloe_theme import ThemeDialog, list_themes, resolve_theme
+from lang import list_languages, resolve_language, t
+from theme import ThemeDialog, list_themes, resolve_theme
 
 from engine import APP_NAME, VERSION
 from engine import effect as fx

@@ -11,8 +11,8 @@ import sys
 import tkinter as tk
 from tkinter import font as tkfont, messagebox, ttk
 
-from chloe_lang import t
-from chloe_theme import resolve_color
+from lang import t
+from theme import resolve_color
 
 from engine.jobs import JobState, QueueError
 from ui.common import IS_WIN, fmt_time, mix_color

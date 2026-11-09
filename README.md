@@ -33,7 +33,7 @@ Layer timing: *Start* is where the layer begins on the timeline, *In point* the 
 
 ## Adding an effect
 
-Drop a module into `effects/` (every module not starting with `_` is imported at start). No other file changes:
+Drop a module into `effect/` (every module not starting with `_` is imported at start). No other file changes:
 
     from engine.effect import Effect, Param, register, num
 
@@ -56,10 +56,10 @@ Drop a module into `effects/` (every module not starting with `_` is imported at
 ## Files
 
     chloe_videoeditor.py   entry point
-    chloe_lang.py, chloe_theme.py   language and theme support (shared with Chloe Photoviewer)
+    lang.py, theme.py   language and theme support (shared with Chloe Photoviewer)
     engine/   effect.py (effect interface + registry), project.py, compiler.py, ffmpeg.py, jobs.py (job queue + workers), preview.py, config.py  (no Tk)
     ui/       app.py, panels.py, dialogs.py, jobs.py (job queue window), common.py
-    effects/  color.py, detail.py, style.py
+    effect/  color.py, detail.py, style.py
     lang/  theme/
 
 The config `config.json` and, by default, the preview cache (`cache/`, emptied on exit) are saved next to the program; nothing is written to AppData or the home folder. Only `config.json` is read (an old `chloe_videoeditor.json` is ignored, so copy its content over if you want to keep it). The cache can be moved to any folder in Settings > General > Cache folder (empty = `cache/` next to the program); it is used at once and only `run_` folders made by this program are ever removed there.

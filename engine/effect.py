@@ -2,7 +2,7 @@
 effect.py - Everything an effect plugin needs, in one place: Param, RenderContext, Effect, the
 registry and the plugin loader.
 
-An effect is one small class in a module of the effects/ folder; nothing else has to change:
+An effect is one small class in a module of the effect/ folder; nothing else has to change:
 
     from engine.effect import Effect, Param, register, num
 
@@ -196,7 +196,7 @@ def load_errors() -> List[str]:
     return list(_load_errors)
 
 
-def discover(package: str = "effects") -> int:
+def discover(package: str = "effect") -> int:
     """
     Import every module of the plugin package so its effects register. A broken module is skipped
     and reported by load_errors(); the others still load.

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-chloe_theme.py - Themes for the Chloe programs.
+theme.py - Themes for the Chloe programs.
 
 One theme = one JSON file in
 theme/ next to this script (theme/<code>.json). A theme holds EVERY color the
@@ -25,7 +25,7 @@ the next program start. A theme file is edited in Settings > Appearance >
 Edit theme... or by hand while the program is closed.
 
 The names of the colors and groups are the entries "<group>.<name>" and
-"group.<group>" of lang/<code>.json (see chloe_lang.py).
+"group.<group>" of lang/<code>.json (see lang.py).
 """
 
 import json
@@ -35,7 +35,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, colorchooser
 import tkinter.font as tkfont
 
-from chloe_lang import t
+from lang import t
 
 GROUPS = {
     # Window and widget colors. Used when a theme sets any of them; if every

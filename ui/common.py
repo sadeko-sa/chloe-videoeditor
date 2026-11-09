@@ -6,8 +6,8 @@ import sys
 import tkinter as tk
 from tkinter import ttk
 
-from chloe_lang import t
-from chloe_theme import resolve_color
+from lang import t
+from theme import resolve_color
 
 from engine.ffmpeg import IS_WIN
 

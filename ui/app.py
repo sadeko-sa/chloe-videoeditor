@@ -8,8 +8,8 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from chloe_lang import list_languages, resolve_language, set_language, t
-from chloe_theme import ThemeDialog, apply_theme, list_themes, resolve_color, resolve_theme, set_theme
+from lang import list_languages, resolve_language, set_language, t
+from theme import ThemeDialog, apply_theme, list_themes, resolve_color, resolve_theme, set_theme
 
 from engine import APP_NAME, VERSION
 from engine import ffmpeg as ff

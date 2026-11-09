@@ -140,7 +140,7 @@
   "msg.overwrite": "{name} は既に存在します。置き換えますか?",
   "msg.frame_exported": "フレームを書き出しました: {path}",
   "msg.frame_failed": "フレームを書き出せませんでした: {error}",
-  "msg.effect_missing": "エフェクト \"{id}\" はインストールされていません (effects フォルダにファイルがありません)。スキップされます。",
+  "msg.effect_missing": "エフェクト \"{id}\" はインストールされていません (effect フォルダにファイルがありません)。スキップされます。",
   "about.description": "小型のクロスプラットフォーム動画エディタ。レイヤー、調整レイヤー、エフェクトは 1 つの FFmpeg フィルタグラフにまとめられ、プレビューは 1 フレームだけを描画します。",
   "about.ffmpeg": "FFmpeg",
   "about.missing": "見つかりません",

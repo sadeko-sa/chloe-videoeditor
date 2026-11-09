@@ -101,9 +101,27 @@ class Contrast(Effect):
         return [_lut("maxval*if(lt(%s,0.5),pow(2*%s,%s)/2,1-pow(max(2-2*%s,0),%s)/2)" % (x, x, p, x, p))]
 
 
+_EXPOSURE_STOPS = 0.05
+"""Stops of exposure per slider unit: -100..100 gives -5..+5 stops (Photoshop's Exposure dialog allows more)."""
+
+
+def _srgb_to_linear(x):
+    """@param x  lutrgb text of an sRGB value 0..1  @return lutrgb text of the same value in linear light"""
+    return "if(lte(%s,0.04045),%s/12.92,pow((%s+0.055)/1.055,2.4))" % (x, x, x)
+
+
+def _linear_to_srgb(y):
+    """@param y  lutrgb text of a linear light value >= 0  @return lutrgb text of the sRGB value (lutrgb clips above 1)"""
+    return "if(lte(%s,0.0031308),%s*12.92,1.055*pow(%s,1/2.4)-0.055)" % (y, y, y)
+
+
 @register
 class Exposure(Effect):
-    """Exposure: negative scales by 2^(amount*0.02353); positive lifts the dark parts more."""
+    """
+    Exposure like Photoshop's Image > Adjustments > Exposure with Offset 0 and Gamma 1: the picture is
+    turned to linear light, multiplied by 2^stops and turned back to sRGB. Slider 100 = +5 stops,
+    -100 = -5 stops. Every channel is treated alone, so it is one exact lutrgb table.
+    """
 
     id = "exposure"
     name = "Exposure"
@@ -118,10 +136,8 @@ class Exposure(Effect):
         amount = v["amount"]
         if not amount:
             return []
-        if amount < 0:
-            return [_lut("val*%s" % num(2 ** (amount * 0.02353), 6))]
-        x = _unit()
-        return [_lut("maxval*%s*(1+pow(6,-%s)*%s)" % (x, x, num(amount * 0.034, 5)))]
+        gain = num(2 ** (amount * _EXPOSURE_STOPS), 6)
+        return [_lut("maxval*%s" % _linear_to_srgb("(%s*%s)" % (_srgb_to_linear(_unit()), gain)))]
 
 
 @register
