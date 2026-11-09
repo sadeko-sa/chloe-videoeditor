@@ -1,0 +1,15 @@
+name: Test CPU Worker
+
+on:
+  workflow_dispatch:
+
+jobs:
+  worker:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check CPU
+        run: |
+          nproc
+          lscpu
+          free -h
+          df -h
