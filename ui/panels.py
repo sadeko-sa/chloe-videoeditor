@@ -6,6 +6,7 @@ from tkinter import ttk
 from lang import t
 
 from engine import effect as fx
+from engine import preset as pr
 from engine.project import FITS, MediaLayer
 from ui.common import Tip, category_label, choice_label, effect_name, fmt_number, highlight_fade, param_label
 
@@ -254,6 +255,8 @@ class EffectPanel(ttk.LabelFrame):
         bar.pack(fill="x")
         self.add_btn = ttk.Button(bar, text=t("btn.add_effect") + " \u25BE", command=self._add_menu)
         self.add_btn.pack(side="left")
+        self.preset_btn = ttk.Button(bar, text=t("btn.preset") + " \u25BE", command=self._preset_menu)
+        self.preset_btn.pack(side="left", padx=(4, 0))
         for text, cmd in (("\u25B2", lambda: app.move_effect(1)),      # up = applied later
                           ("\u25BC", lambda: app.move_effect(-1))):   # down = applied earlier
             ttk.Button(bar, text=text, width=3, command=cmd).pack(side="left", padx=(4, 0))
@@ -286,6 +289,23 @@ class EffectPanel(ttk.LabelFrame):
                 sub.add_command(label=effect_name(eff), command=lambda e=eff: self.app.add_effect(e.id))
             menu.add_cascade(label=category_label(category), menu=sub)
         x, y = self.add_btn.winfo_rootx(), self.add_btn.winfo_rooty() + self.add_btn.winfo_height()
+        try:
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
+
+    def _preset_menu(self):
+        """Pop up the saved effect preset (a click applies it), then Save as preset and the preset manager."""
+        layer = self.app.selected()
+        menu = tk.Menu(self, tearoff=0)
+        for p in pr.load():
+            menu.add_command(label=p.name, command=lambda p=p: self.app.apply_preset(p),
+                             state="normal" if layer else "disabled")
+        menu.add_separator()
+        menu.add_command(label=t("menu.preset_save"), command=self.app.save_preset_dialog,
+                         state="normal" if layer and layer.effects else "disabled")
+        menu.add_command(label=t("menu.preset_manage"), command=self.app.preset_manager)
+        x, y = self.preset_btn.winfo_rootx(), self.preset_btn.winfo_rooty() + self.preset_btn.winfo_height()
         try:
             menu.tk_popup(x, y)
         finally:

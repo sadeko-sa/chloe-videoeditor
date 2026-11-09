@@ -14,6 +14,7 @@ from theme import ThemeDialog, apply_theme, list_themes, resolve_color, resolve_
 
 from engine import APP_NAME, VERSION
 from engine import ffmpeg as ff
+from engine import preset as pr
 from engine.compiler import CompileError
 from engine.config import push_recent, save_config
 from engine.jobs import JobQueue, JobState
@@ -24,6 +25,7 @@ from ui.common import IS_WIN, Tip, fmt_frame_name, fmt_time
 from ui.dialogs import AboutDialog, ExportDialog, GotoDialog, ProjectDialog, SettingsDialog
 from ui.jobs import JobsWindow
 from ui.panels import EffectPanel, LayerPanel, PropertiesPanel
+from ui.preset import NameDialog, PresetManager
 
 try:                                            # optional: pip install tkinterdnd2
     from tkinterdnd2 import DND_FILES, TkinterDnD
@@ -877,6 +879,38 @@ class App:
         self.sel_effect = at
         self.effects.refresh(layer, self.sel_effect)
         self.touch()
+
+    def apply_preset(self, preset):
+        """Put the effect chain of a preset into the selected layer, in the place a new effect would go."""
+        layer = self.selected()
+        instance = preset.instance()
+        if layer is None or not instance:
+            return
+        at = len(layer.effects) if self.sel_effect is None else self.sel_effect + 1
+        layer.effects[at:at] = instance
+        self.sel_effect = at + len(instance) - 1
+        self.effects.refresh(layer, self.sel_effect)
+        self.touch()
+
+    def save_preset_dialog(self):
+        """Save the whole effect chain of the selected layer as a preset."""
+        layer = self.selected()
+        if layer is None or not layer.effects:
+            return
+        name = NameDialog(self.root, layer.name).result
+        if not name:
+            return
+        preset = pr.load()
+        preset.append(pr.EffectPreset.from_layer(pr.unique_name(name, [p.name for p in preset]), layer))
+        try:
+            pr.save(preset)
+        except pr.PresetError as exc:
+            messagebox.showerror(t("dlg.error"), t("preset.save_failed", error=exc), parent=self.root)
+
+    def preset_manager(self):
+        chosen = PresetManager(self, self.selected() is not None).result
+        if chosen is not None:
+            self.apply_preset(chosen)
 
     def remove_effect(self):
         layer, i = self.selected(), self.sel_effect
