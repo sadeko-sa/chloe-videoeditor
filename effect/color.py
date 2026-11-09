@@ -165,7 +165,7 @@ class Shadows(Effect):
 class Highlights(Effect):
     """
     Highlights. Per pixel: m = max(r, g, b); the brightest channel follows
-    m' = 1 - (1 - a * m * m) * (1 - m) with a = amount / 100, and all three channels are scaled by the
+    m' = 1 - (1 - a * m * m) * (1 - m) with a = amount / 50 (slider -100..100, so a is -2..2), and all three channels are scaled by the
     same gain m' / m = 1 + a * m * (1 - m). Black and white stay, bright pixels move the most, and hue
     and saturation are kept (a pure gain never changes the ratios between the channels).
     """
@@ -182,7 +182,7 @@ class Highlights(Effect):
         """
         if not v["amount"]:
             return []
-        gain = "(1+%s*%s*(1-%s))" % (num(v["amount"] / 100, 5), _MAX_OF, _MAX_OF)
+        gain = "(1+%s*%s*(1-%s))" % (num(v["amount"] / 50, 5), _MAX_OF, _MAX_OF)
         return _geq(lambda c: "%s*%s" % (_ch(c), gain))
 
 
