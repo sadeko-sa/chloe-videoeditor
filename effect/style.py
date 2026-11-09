@@ -2,7 +2,7 @@
 
 import math
 
-from engine.effect import Effect, Param, num, quote, register
+from engine.effect import ChainEffect, Param, num, quote, register
 
 
 def _mask(width, height, size, feather, roundness):
@@ -37,7 +37,7 @@ def _mask(width, height, size, feather, roundness):
 
 
 @register
-class Vignette(Effect):
+class Vignette(ChainEffect):
     """
     Vignette. The picture inside the ellipse is scaled by the exposure factor, the outside
     by 1 + amount (negative = darker edges), with a feathered cosine transition; in the transition
@@ -77,7 +77,7 @@ class Vignette(Effect):
 
 
 @register
-class Flip(Effect):
+class Flip(ChainEffect):
     """Mirrors the picture horizontally, vertically or both."""
 
     id = "flip"

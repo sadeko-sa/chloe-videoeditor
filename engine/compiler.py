@@ -18,10 +18,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from fractions import Fraction
-from typing import List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import effect as fx
-from .effect import RenderContext, num, quote
+from .effect import GraphBuilder, RenderContext, num, quote
 from .project import AdjustmentLayer, Layer, MediaLayer, Project, even
 
 
@@ -51,7 +51,7 @@ class Job:
         return [arg for item in self.inputs for arg in item]
 
 
-class _Graph:
+class _Graph(GraphBuilder):
     """Collects the chains of a filter graph and makes up the labels between them."""
 
     def __init__(self):
@@ -71,12 +71,12 @@ class _Graph:
         self.chains.append("".join("[%s]" % s for s in sources) + ",".join(filters or ["null"]) + "[%s]" % out)
         return out
 
-    def split(self, source: str) -> Tuple[str, str]:
-        """@return two labels that both carry the picture of `source`"""
+    def split(self, source: str, count: int = 2) -> List[str]:
+        """@return `count` labels that all carry the picture of `source`"""
         self._count += 1
-        a, b = "n%da" % self._count, "n%db" % self._count
-        self.chains.append("[%s]split[%s][%s]" % (source, a, b))
-        return a, b
+        labels = ["n%d%s" % (self._count, chr(ord("a") + i)) for i in range(count)]
+        self.chains.append("[%s]split=%d%s" % (source, count, "".join("[%s]" % x for x in labels)))
+        return labels
 
     def text(self) -> str:
         return ";".join(self.chains)
@@ -93,18 +93,35 @@ def color_matrix(height: int) -> str:
     return "bt709" if height >= 720 else "bt601"
 
 
-def _effects(layer: Layer, ctx: RenderContext) -> List[str]:
-    """@return the filters of the enabled effects of a layer, in order"""
-    out: List[str] = []
+_Step = Tuple[fx.Effect, Dict[str, Any]]
+"""An effect of a layer that changes the picture, with its checked values."""
+
+
+def _steps(layer: Layer, ctx: RenderContext) -> List[_Step]:
+    """@return the enabled, installed effects of a layer that change something, in order"""
+    out: List[_Step] = []
     for inst in layer.effects:
         eff = fx.get(inst.effect_id)
         if not inst.enabled or eff is None:
             continue
+        values = eff.normalize(inst.values)
         try:
-            out.extend(eff.filters(eff.normalize(inst.values), ctx))
+            neutral = eff.is_neutral(values, ctx)
         except Exception as exc:                                    # a plugin bug must not crash the program
             raise CompileError("%s: %s" % (eff.id, exc))
+        if not neutral:
+            out.append((eff, values))
     return out
+
+
+def _wire(g: _Graph, source: str, steps: Sequence[_Step], ctx: RenderContext) -> str:
+    """@return label of the picture after `steps` were added to the graph one after the other"""
+    for eff, values in steps:
+        try:
+            source = eff.apply(g, source, values, ctx)
+        except Exception as exc:                                    # a plugin bug must not crash the program
+            raise CompileError("%s: %s" % (eff.id, exc))
+    return source
 
 
 def _fit(layer: MediaLayer, width: int, height: int) -> List[str]:
@@ -124,17 +141,35 @@ def _opacity(layer: Layer) -> List[str]:
 _OVERLAY = "overlay=x=(main_w-overlay_w)/2:y=(main_h-overlay_h)/2:eof_action=pass:format=auto"
 
 
-def _adjust(g: _Graph, current: str, layer: Layer, filters: List[str], window: Optional[str]) -> str:
+def _media_picture(g: _Graph, layer: MediaLayer, index: int, head: Sequence[str], tail: Sequence[str],
+                   ctx: RenderContext) -> str:
+    """
+    One media layer ready to be drawn: input -> head -> fit to the frame -> effects -> opacity -> tail.
+
+    @param index  number of the layer's input file
+    @param head   filters before the fit (timestamps, frame rate)
+    @param tail   filters after the opacity (time shift)
+    @return       label of the picture
+    """
+    picture = g.chain(["%d:v" % index], list(head) + _fit(layer, ctx.width, ctx.height))
+    picture = _wire(g, picture, _steps(layer, ctx), ctx)
+    after = _opacity(layer) + list(tail)
+    return g.chain([picture], after) if after else picture
+
+
+def _adjust(g: _Graph, current: str, layer: Layer, steps: Sequence[_Step], ctx: RenderContext,
+            window: Optional[str]) -> str:
     """
     Apply the effects of an adjustment layer to the picture so far.
 
+    @param steps   the effects that change something (see _steps), not empty
     @param window  FFmpeg time expression ("between(t,1,2)") in which the layer works, None = always
     @return        label of the new picture
     """
     if layer.opacity >= 1 and window is None:
-        return g.chain([current], filters)
+        return _wire(g, current, steps, ctx)
     below, above = g.split(current)
-    changed = g.chain([above], filters)
+    changed = _wire(g, above, steps, ctx)
     # blend: output = first * opacity + second * (1 - opacity), and a disabled blend passes the FIRST input.
     # So the untouched picture goes first and gets the weight 1 - layer opacity.
     options = "blend=all_mode=normal:all_opacity=%s" % num(1 - layer.opacity)
@@ -177,10 +212,9 @@ def compile_export(project: Project) -> Job:
             else:
                 seek = ["-ss", num(layer.in_point, 6)] if layer.in_point > 0 else []
                 job.inputs.append(seek + ["-t", num(layer.duration, 6), "-i", layer.path])
-            body = ["setpts=PTS-STARTPTS", "fps=" + fps] + _fit(layer, width, height) + _effects(layer, ctx) + _opacity(layer)
-            if layer.start > 0:
-                body.append("setpts=PTS+%s/TB" % num(layer.start, 6))
-            current = g.chain([current, g.chain(["%d:v" % index], body)], [_OVERLAY])
+            shift = ["setpts=PTS+%s/TB" % num(layer.start, 6)] if layer.start > 0 else []
+            picture = _media_picture(g, layer, index, ["setpts=PTS-STARTPTS", "fps=" + fps], shift, ctx)
+            current = g.chain([current, picture], [_OVERLAY])
             if layer.has_audio and layer.volume > 0:
                 delay = int(round(layer.start * 1000))
                 tail = ["adelay=%d|%d" % (delay, delay)] if delay else []
@@ -188,15 +222,15 @@ def compile_export(project: Project) -> Job:
                     "asetpts=PTS-STARTPTS", "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo",
                     "volume=%s" % num(layer.volume)] + tail))
         else:
-            filters = _effects(layer, ctx)
-            if not filters:
+            steps = _steps(layer, ctx)
+            if not steps:
                 continue
             begin = num(layer.start, 6)
             if layer.duration > 0:
                 window = "between(t,%s,%s)" % (begin, num(layer.start + layer.duration, 6))
             else:
                 window = "gte(t,%s)" % begin if layer.start > 0 else None
-            current = _adjust(g, current, layer, filters, window)
+            current = _adjust(g, current, layer, steps, ctx, window)
     job.video = g.chain([current], ["format=yuv420p"])
     if len(sounds) == 1:
         job.audio = sounds[0]
@@ -248,12 +282,12 @@ def compile_frame(project: Project, layers: Sequence[Layer], t: float, size: Tup
                 if layer.source_duration > 0:
                     local = min(local, max(layer.source_duration - 1.0 / project.fps, 0.0))
                 job.inputs.append(["-ss", num(local, 6), "-i", layer.path])
-            body = ["setpts=PTS-STARTPTS"] + _fit(layer, width, height) + _effects(layer, ctx) + _opacity(layer)
-            current = g.chain([current, g.chain(["%d:v" % index], body)], [_OVERLAY])
+            picture = _media_picture(g, layer, index, ["setpts=PTS-STARTPTS"], [], ctx)
+            current = g.chain([current, picture], [_OVERLAY])
         else:
-            filters = _effects(layer, ctx)
-            if filters:
-                current = _adjust(g, current, layer, filters, None)
+            steps = _steps(layer, ctx)
+            if steps:
+                current = _adjust(g, current, layer, steps, ctx, None)
         if tap == done:
             current, tapped = g.split(current)
             job.prefix = _to_rgb(g, tapped, height)

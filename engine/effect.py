@@ -1,13 +1,14 @@
 """
-effect.py - Everything an effect plugin needs, in one place: Param, RenderContext, Effect, the
-registry and the plugin loader.
+effect.py - Everything an effect plugin needs, in one place: Param, RenderContext, GraphBuilder,
+Effect, ChainEffect, the registry and the plugin loader.
 
-An effect is one small class in a module of the effect/ folder; nothing else has to change:
+An effect is one small class in a module of the effect/ folder; nothing else has to change. Most
+effects are one straight chain of FFmpeg filters and extend ChainEffect:
 
-    from engine.effect import Effect, Param, register, num
+    from engine.effect import ChainEffect, Param, register, num
 
     @register
-    class Invert(Effect):
+    class Invert(ChainEffect):
         id = "invert"                      # stable id saved in projects: lowercase, digits, _
         name = "Invert"                    # English name; lang files may override it ("effect.invert")
         category = "color"                 # group in the "Add effect" menu ("category.color")
@@ -18,8 +19,11 @@ An effect is one small class in a module of the effect/ folder; nothing else has
 
 filters() returns FFmpeg filter strings, in order (the filters of one effect form a chain). An empty
 list means "no change", so a neutral setting costs nothing in the export. Values that contain
-, : ; [ ] or spaces must be wrapped with quote(). Effects are stateless; the values of every use live
-in the project (engine/project.py).
+, : ; [ ] or spaces must be wrapped with quote().
+
+An effect that needs branches (a blurred copy blended back, ...) extends Effect directly and wires
+itself into the graph through the GraphBuilder it is given: see Clarity in effect/detail.py.
+Effects are stateless; the values of every use live in the project (engine/project.py).
 
 Optional texts in lang/<code>.json (the English name and labels above are the fallback):
     effect.<id>                 name of the effect
@@ -35,7 +39,7 @@ import pkgutil
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, ClassVar, Dict, List, Mapping, Optional, Tuple
+from typing import Any, ClassVar, Dict, List, Mapping, Optional, Sequence, Tuple
 
 KINDS = ("float", "int", "bool", "choice")
 """Parameter kinds: float / int = number between min and max, bool = on / off, choice = one of `choices`."""
@@ -124,8 +128,32 @@ class RenderContext:
         return value * self.scale
 
 
+class GraphBuilder(ABC):
+    """
+    What an effect may use to put itself into the filter graph. The compiler implements it, so the
+    effects do not depend on the compiler.
+    """
+
+    @abstractmethod
+    def chain(self, sources: Sequence[str], filters: Sequence[str]) -> str:
+        """
+        Add one chain of filters.
+
+        @param sources  labels the first filter of the chain reads (two for a blend, ...)
+        @param filters  filters in order
+        @return         the label of the chain's output
+        """
+
+    @abstractmethod
+    def split(self, source: str, count: int = 2) -> List[str]:
+        """@return `count` labels that all carry the picture of `source`"""
+
+
 class Effect(ABC):
-    """Base class of all effects. See the module text for an example."""
+    """
+    Contract of every effect: it knows when it changes nothing and how to wire itself into the graph.
+    Extend ChainEffect for a plain chain of filters; extend this class for anything with branches.
+    """
 
     id: ClassVar[str]
     name: ClassVar[str]
@@ -142,12 +170,42 @@ class Effect(ABC):
         return {p.key: p.coerce(values.get(p.key, p.default)) for p in self.params}
 
     @abstractmethod
+    def is_neutral(self, v: Mapping[str, Any], ctx: RenderContext) -> bool:
+        """
+        @param v    checked values of all parameters (see normalize)
+        @param ctx  picture the effect will run on
+        @return     True if these values change nothing; the effect is then left out of the graph
+        """
+
+    @abstractmethod
+    def apply(self, g: GraphBuilder, source: str, v: Mapping[str, Any], ctx: RenderContext) -> str:
+        """
+        Add the effect to the graph. Only called when is_neutral() is False.
+
+        @param g       where to add chains
+        @param source  label of the picture the effect works on
+        @param v       checked values of all parameters
+        @param ctx     picture the effect runs on
+        @return        label of the changed picture
+        """
+
+
+class ChainEffect(Effect):
+    """An effect that is one straight chain of FFmpeg filters; subclasses only write filters()."""
+
+    @abstractmethod
     def filters(self, v: Mapping[str, Any], ctx: RenderContext) -> List[str]:
         """
         @param v    checked values of all parameters (see normalize)
         @param ctx  picture the filters will run on
         @return     FFmpeg filter strings in order, [] if the values change nothing
         """
+
+    def is_neutral(self, v: Mapping[str, Any], ctx: RenderContext) -> bool:
+        return not self.filters(v, ctx)
+
+    def apply(self, g: GraphBuilder, source: str, v: Mapping[str, Any], ctx: RenderContext) -> str:
+        return g.chain([source], self.filters(v, ctx))
 
 
 # --------------------------------------------------------------------------- #

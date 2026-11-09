@@ -35,10 +35,10 @@ Layer timing: *Start* is where the layer begins on the timeline, *In point* the 
 
 Drop a module into `effect/` (every module not starting with `_` is imported at start). No other file changes:
 
-    from engine.effect import Effect, Param, register, num
+    from engine.effect import ChainEffect, Param, register, num
 
     @register
-    class Gamma(Effect):
+    class Gamma(ChainEffect):
         id = "gamma"
         name = "Gamma"
         category = "color"
@@ -49,6 +49,8 @@ Drop a module into `effect/` (every module not starting with `_` is imported at 
 
 `filters()` returns FFmpeg filter strings (`[]` = no change). `ctx.px()` converts pixel sizes for the smaller preview. Parameter kinds: float, int, bool, choice. Optional translations: `effect.<id>`, `effect.<id>.<param>`, `choice.<id>.<param>.<value>`, `category.<category>` in `lang/*.json`; without them the English texts are used. A broken plugin is skipped and listed in Settings > About.
 
+An effect that needs branches (for example a blurred copy that is blended back) extends `Effect` instead and implements `is_neutral(v, ctx)` and `apply(g, source, v, ctx)`. `g` is a `GraphBuilder` (`chain()` adds a chain of filters, `split()` copies a picture), `source` the label of the picture and the result is the label of the changed one. `Clarity` in `effect/detail.py` is an example.
+
 ## Languages and themes
 
 `lang/<code>.json` and `theme/<code>.json`, same format as Chloe Photoviewer (English and Japanese included, six themes). Choose the language in the Language root menu (or Settings > Language) and the theme in the Settings menu > Theme (or Settings > Appearance; both used from the next start; languages are listed as English name - native name, e.g. Japanese - 日本語); *Settings > Theme > Edit theme...* edits a theme file. The Settings dialog is in its own Settings menu (Ctrl+,).
@@ -57,7 +59,7 @@ Drop a module into `effect/` (every module not starting with `_` is imported at 
 
     chloe_videoeditor.py   entry point
     lang.py, theme.py   language and theme support (shared with Chloe Photoviewer)
-    engine/   effect.py (effect interface + registry), project.py, compiler.py, ffmpeg.py, jobs.py (job queue + workers), preview.py, config.py  (no Tk)
+    engine/   effect.py (effect interfaces + registry), project.py, compiler.py, ffmpeg.py, jobs.py (job queue + workers), preview.py, config.py  (no Tk)
     ui/       app.py, panels.py, dialogs.py, jobs.py (job queue window), common.py
     effect/  color.py, detail.py, style.py
     lang/  theme/

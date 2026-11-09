@@ -6,7 +6,7 @@ gives the same picture. Effects that only look at the channel itself use lutrgb 
 (highlights, saturation, vibrance, black level) use geq on RGB planes.
 """
 
-from engine.effect import Effect, Param, num, quote, register
+from engine.effect import ChainEffect, Param, num, quote, register
 
 _MAX_OF = "max(r(X,Y),max(g(X,Y),b(X,Y)))/255"
 """geq text: the brightest channel of the pixel, 0..1."""
@@ -56,7 +56,7 @@ def _ch(c):
 
 
 @register
-class Brightness(Effect):
+class Brightness(ChainEffect):
     """Brightness: positive multiplies the picture, negative subtracts a lift."""
 
     id = "brightness"
@@ -79,7 +79,7 @@ class Brightness(Effect):
 
 
 @register
-class Contrast(Effect):
+class Contrast(ChainEffect):
     """Contrast: an S curve around 0.5 made of a power law on each half."""
 
     id = "contrast"
@@ -116,7 +116,7 @@ def _linear_to_srgb(y):
 
 
 @register
-class Exposure(Effect):
+class Exposure(ChainEffect):
     """
     Exposure like Photoshop's Image > Adjustments > Exposure with Offset 0 and Gamma 1: the picture is
     turned to linear light, multiplied by 2^stops and turned back to sRGB. Slider 100 = +5 stops,
@@ -141,7 +141,7 @@ class Exposure(Effect):
 
 
 @register
-class Shadows(Effect):
+class Shadows(ChainEffect):
     """Shadows: a gamma on every channel (power 1 - 0.004*amount up, 1 - 0.006*amount down)."""
 
     id = "shadows"
@@ -162,7 +162,7 @@ class Shadows(Effect):
 
 
 @register
-class Highlights(Effect):
+class Highlights(ChainEffect):
     """
     Highlights. Per pixel: m = max(r, g, b); the brightest channel follows
     m' = 1 - (1 - a * m * m) * (1 - m) with a = amount / 50 (slider -100..100, so a is -2..2), and all three channels are scaled by the
@@ -187,7 +187,7 @@ class Highlights(Effect):
 
 
 @register
-class BlackLevel(Effect):
+class BlackLevel(ChainEffect):
     """Black level: positive lifts the darkest pixels (screen blend), negative crushes them."""
 
     id = "black_level"
@@ -211,7 +211,7 @@ class BlackLevel(Effect):
 
 
 @register
-class WhiteLevel(Effect):
+class WhiteLevel(ChainEffect):
     """White level: scales the picture by 1 + 0.0035*amount (up) or 1 + 0.0025*amount (down)."""
 
     id = "white_level"
@@ -231,7 +231,7 @@ class WhiteLevel(Effect):
 
 
 @register
-class Saturation(Effect):
+class Saturation(ChainEffect):
     """
     Saturation: pushes every channel away from a luma gray. A boost is weaker on pixels
     that are already saturated; a cut applies to all colored pixels equally. Gray pixels stay.
@@ -261,7 +261,7 @@ class Saturation(Effect):
 
 
 @register
-class Vibrance(Effect):
+class Vibrance(ChainEffect):
     """
     Vibrance: moves every channel toward (negative) or away from (positive) the brightest
     channel, weighted so dull colors change more than vivid ones.
@@ -366,7 +366,7 @@ def _hsl_back_statements(c):
 
 
 @register
-class HSL(Effect):
+class HSL(ChainEffect):
     """
     HSL: hue, saturation and brightness for each of eight color bands (red, orange, yellow,
     green, magenta, purple, blue, aqua), all -100..100. A band affects pixels whose hue lies in its
@@ -410,7 +410,7 @@ def _hsl_value():
 
 
 @register
-class WhiteBalance(Effect):
+class WhiteBalance(ChainEffect):
     """Temperature and tint: a gain per channel (red/blue by temperature, green/magenta by tint)."""
 
     id = "white_balance"
@@ -432,7 +432,7 @@ class WhiteBalance(Effect):
 
 
 @register
-class Hue(Effect):
+class Hue(ChainEffect):
     """Hue rotation, done with the FFmpeg hue filter."""
 
     id = "hue"
