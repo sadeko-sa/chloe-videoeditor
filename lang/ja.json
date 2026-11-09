@@ -74,7 +74,7 @@
   "menu.goto": "指定の時間 / フレームへ移動...",
   "btn.add_media": "+ メディア",
   "btn.add_adjustment": "+ 調整",
-  "btn.add_effect": "エフェクトを追加",
+  "btn.add_effect": "追加",
   "btn.export": "書き出し",
   "tip.layer_up": "レイヤーを上へ",
   "tip.layer_down": "レイヤーを下へ",

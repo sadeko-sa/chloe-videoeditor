@@ -74,7 +74,7 @@
   "menu.goto": "Go to time / frame...",
   "btn.add_media": "+ Media",
   "btn.add_adjustment": "+ Adjustment",
-  "btn.add_effect": "Add effect",
+  "btn.add_effect": "Add",
   "btn.export": "Export",
   "tip.layer_up": "Move layer up",
   "tip.layer_down": "Move layer down",
