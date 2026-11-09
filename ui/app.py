@@ -701,7 +701,7 @@ class App:
             self.sel_layer = self.project.layers[-1].id if self.project.layers else None
         layer = self.selected()
         if layer is None or not 0 <= (self.sel_effect if self.sel_effect is not None else -1) < len(layer.effects):
-            self.sel_effect = 0 if layer and layer.effects else None
+            self.sel_effect = len(layer.effects) - 1 if layer and layer.effects else None     # the top row
         self.refresh_layers()
         self.refresh_inspector()
 
@@ -719,7 +719,7 @@ class App:
     def select_layer(self, layer_id):
         self.sel_layer = layer_id
         layer = self.selected()
-        self.sel_effect = 0 if layer and layer.effects else None
+        self.sel_effect = len(layer.effects) - 1 if layer and layer.effects else None         # the top row
         self.refresh_inspector()
         self.request_preview()
 
@@ -870,8 +870,10 @@ class App:
         layer = self.selected()
         if layer is None:
             return
-        layer.effects.append(EffectInstance.create(effect_id))
-        self.sel_effect = len(layer.effects) - 1
+        # Above the selected effect = applied right after it (like a new layer in Photoshop); nothing selected = on top.
+        at = len(layer.effects) if self.sel_effect is None else self.sel_effect + 1
+        layer.effects.insert(at, EffectInstance.create(effect_id))
+        self.sel_effect = at
         self.effects.refresh(layer, self.sel_effect)
         self.touch()
 

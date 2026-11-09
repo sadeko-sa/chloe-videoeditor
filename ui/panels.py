@@ -35,7 +35,7 @@ class LayerPanel(ttk.Frame):
         self.tree = ttk.Treeview(self, columns=("on", "name", "kind"), show="headings", selectmode="browse", height=8)
         for col, key, width, stretch in (("on", "", 30, False), ("name", "col.layer", 130, True),
                                          ("kind", "col.type", 80, False)):
-            self.tree.heading(col, text=t(key) if key else "")
+            self.tree.heading(col, text=t(key) if key else "", anchor="w")      # header text left, like the cells below
             self.tree.column(col, width=width, stretch=stretch, anchor="center" if col == "on" else "w")
         self.tree.tag_configure("missing", foreground=app.col_err)
         self.tree.pack(fill="both", expand=True)
@@ -242,7 +242,10 @@ class ParamEditor(ttk.Frame):
 
 
 class EffectPanel(ttk.LabelFrame):
-    """The effect chain of the selected layer (in the order it is applied) and the parameters of the selected effect."""
+    """
+    The effect chain of the selected layer and the parameters of the selected effect. Rows are shown like layers in
+    Photoshop: the bottom row is applied first, the top row last (on top of the others).
+    """
 
     def __init__(self, parent, app):
         super().__init__(parent, text=t("group.effects"), padding=8)
@@ -251,18 +254,23 @@ class EffectPanel(ttk.LabelFrame):
         bar.pack(fill="x")
         self.add_btn = ttk.Button(bar, text=t("btn.add_effect") + " \u25BE", command=self._add_menu)
         self.add_btn.pack(side="left")
-        for text, tip, cmd in (("\u25B2", "tip.effect_up", lambda: app.move_effect(-1)),
-                               ("\u25BC", "tip.effect_down", lambda: app.move_effect(1)),
+        for text, tip, cmd in (("\u25B2", "tip.effect_up", lambda: app.move_effect(1)),      # up = applied later
+                               ("\u25BC", "tip.effect_down", lambda: app.move_effect(-1)),    # down = applied earlier
                                ("\u2715", "tip.effect_remove", app.remove_effect)):
             btn = ttk.Button(bar, text=text, width=3, command=cmd)
             btn.pack(side="left", padx=(4, 0))
             Tip(btn, tip)
-        self.tree = ttk.Treeview(self, columns=("on", "name"), show="headings", selectmode="browse", height=5)
-        self.tree.heading("on", text="")
-        self.tree.heading("name", text=t("col.effect"))
+        box = ttk.Frame(self)                       # holds the list and its scrollbar side by side
+        box.pack(fill="x", pady=6)
+        # show="" = no header row and no tree column: the group is already called "Effects", so a header
+        # "Effect" above the rows would only say it twice.
+        self.tree = ttk.Treeview(box, columns=("on", "name"), show="", selectmode="browse", height=5)
         self.tree.column("on", width=30, stretch=False, anchor="center")
-        self.tree.column("name", width=200, stretch=True)
-        self.tree.pack(fill="x", pady=6)
+        self.tree.column("name", width=200, stretch=True, anchor="w")
+        scroll = ttk.Scrollbar(box, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scroll.set)
+        self.tree.pack(side="left", fill="x", expand=True)
+        scroll.pack(side="right", fill="y")
         self.tree.bind("<<TreeviewSelect>>", self._selected)
         self.tree.bind("<Button-1>", self._click)
         self.tree.bind("<Delete>", lambda e: app.remove_effect())
@@ -287,12 +295,15 @@ class EffectPanel(ttk.LabelFrame):
         """Show the effects of the layer (None = none) and select the one at index `selected`."""
         self._busy = True
         self.tree.delete(*self.tree.get_children())
-        for i, inst in enumerate(layer.effects if layer else []):
+        effects = layer.effects if layer else []
+        for i in reversed(range(len(effects))):     # like Photoshop layers: the top row is applied last, on top of the rest
+            inst = effects[i]
             eff = fx.get(inst.effect_id)
-            self.tree.insert("", "end", iid=str(i),
+            self.tree.insert("", "end", iid=str(i),     # iid = index in layer.effects (the order of application)
                              values=(ON if inst.enabled else OFF, effect_name(eff) if eff else "? " + inst.effect_id))
         if selected is not None and self.tree.exists(str(selected)):
             self.tree.selection_set(str(selected))
+            self.tree.see(str(selected))            # scrolls the list to the selected effect
         self._busy = False
         self.params.show(layer, selected)
 
