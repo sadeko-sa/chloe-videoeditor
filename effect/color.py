@@ -102,7 +102,19 @@ class Contrast(ChainEffect):
 
 
 _EXPOSURE_STOPS = 0.05
-"""Stops of exposure per slider unit: -100..100 gives -5..+5 stops (Photoshop's Exposure dialog allows more)."""
+"""Stops of exposure per slider unit: -100..100 gives -5..+5 stops, the same range as Camera Raw's Exposure."""
+
+_TONE_K = 0.12927
+_TONE_P = 1.40754
+_TONE_Q = 0.5488
+"""
+Constants of the transfer curve (see _tone_out): K = knee (smaller lifts shadows and midtones harder), P = how
+S shaped the curve is, Q = the display gamma folded into the curve. Fitted by least squares to the picture a
+raw converter makes (scene light in, sRGB picture value out); the fit stays within 1.5 of 255 levels.
+"""
+
+_NEGATIVE_KNEE = 0.25
+"""Scene light level up to which a negative exposure is a plain gain; above it the highlights are pulled back to white."""
 
 
 def _srgb_to_linear(x):
@@ -115,12 +127,56 @@ def _linear_to_srgb(y):
     return "if(lte(%s,0.0031308),%s*12.92,1.055*pow(%s,1/2.4)-0.055)" % (y, y, y)
 
 
+def _tone_in(v):
+    """
+    Picture value -> scene light, as the power w = s^P (s itself is only needed for a negative exposure).
+    Inverse of _tone_out:  m = v^(1/Q),  w = K m / (1 + K - m).
+
+    @param v  lutrgb text of the picture value 0..1
+    @return   lutrgb text of w = s^P, s = scene light 0..1
+    """
+    m = "pow(%s,%s)" % (v, num(1 / _TONE_Q, 6))
+    return "(%s*%s/(%s-%s))" % (num(_TONE_K, 6), m, num(1 + _TONE_K, 6), m)
+
+
+def _tone_out(w):
+    """
+    Scene light -> picture value. My own closed formula, not a table:  v = ((1+K) w / (w + K))^Q  with w = s^P.
+    It runs through (0,0) and (1,1), only rises, is steep in the shadows and flattens toward white, so the
+    highlights roll off instead of clipping and the midtones keep an S shaped contrast, the way Camera Raw
+    renders. It already contains the display gamma, so no separate sRGB step is needed.
+
+    @param w  lutrgb text of w = s^P, s = scene light 0..1
+    @return   lutrgb text of the picture value 0..1
+    """
+    return "pow(%s*%s/(%s+%s),%s)" % (num(1 + _TONE_K, 6), w, w, num(_TONE_K, 6), num(_TONE_Q, 6))
+
+
+def _negative(w, stops):
+    """
+    Negative exposure, my own derivation: a gain of 2^stops up to _NEGATIVE_KNEE, then a quadratic that goes on
+    with the same slope (no kink) and ends exactly at 1:  q(s) = g*s + (1-g) * ((s-knee)/(1-knee))^2.
+    White stays white, so the picture keeps its range while shadows and midtones go down.
+
+    @param w      lutrgb text of w = s^P, s = scene light 0..1
+    @param stops  exposure in stops, below 0
+    @return       lutrgb text of w of the darkened scene light
+    """
+    g = num(2.0 ** stops, 6)
+    k = num(_NEGATIVE_KNEE, 4)
+    s = "pow(%s,%s)" % (w, num(1 / _TONE_P, 6))
+    q = "if(lte(%s,%s),%s*%s,%s*%s+(1-%s)*pow((%s-%s)/%s,2))" % (s, k, g, s, g, s, g, s, k, num(1 - _NEGATIVE_KNEE, 4))
+    return "pow(%s,%s)" % (q, num(_TONE_P, 6))
+
+
 @register
 class Exposure(ChainEffect):
     """
-    Exposure like Photoshop's Image > Adjustments > Exposure with Offset 0 and Gamma 1: the picture is
-    turned to linear light, multiplied by 2^stops and turned back to sRGB. Slider 100 = +5 stops,
-    -100 = -5 stops. Every channel is treated alone, so it is one exact lutrgb table.
+    Exposure after Camera Raw: the picture is taken back to scene light (_tone_in), brightened (gain 2^stops,
+    stops at white) or darkened (_negative, white stays white) and put through the S shaped curve again
+    (_tone_out). The curve is applied after the gain, so contrast is kept instead of the picture dimming or
+    washing out, and 0 stops is exactly neutral. Slider 100 = +5 stops, -100 = -5 stops. Every channel is
+    treated alone, so it is one exact lutrgb table.
     """
 
     id = "exposure"
@@ -136,8 +192,15 @@ class Exposure(ChainEffect):
         amount = v["amount"]
         if not amount:
             return []
-        gain = num(2 ** (amount * _EXPOSURE_STOPS), 6)
-        return [_lut("maxval*%s" % _linear_to_srgb("(%s*%s)" % (_srgb_to_linear(_unit()), gain)))]
+        stops = amount * _EXPOSURE_STOPS
+        # lutrgb also evaluates a few table entries above the maximum, the formula only holds up to 1
+        w = _tone_in("min(%s,1)" % _unit())
+        if stops > 0:
+            w = "min(%s*%s,1)" % (w, num(2.0 ** (stops * _TONE_P), 6))
+        else:
+            w = _negative(w, stops)
+        # + 0.5: lutrgb cuts the fraction off, this rounds to the nearest level so white stays 255
+        return [_lut("maxval*%s+0.5" % _tone_out(w))]
 
 
 @register
