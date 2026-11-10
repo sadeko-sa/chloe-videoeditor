@@ -77,7 +77,7 @@ class EffectInstance:
         return cls(effect_id, eff.defaults() if eff else {})
 
     def to_dict(self) -> Dict[str, Any]:
-        return {"effect": self.effect_id, "enabled": self.enabled, "values": dict(self.values)}
+        return {"effect": self.effect_id, "enabled": self.enabled, "values": copy.deepcopy(self.values)}
 
     @classmethod
     def from_dict(cls, data: Any) -> Optional["EffectInstance"]:

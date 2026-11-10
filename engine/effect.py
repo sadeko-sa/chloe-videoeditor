@@ -41,8 +41,13 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, ClassVar, Dict, List, Mapping, Optional, Sequence, Tuple
 
-KINDS = ("float", "int", "bool", "choice")
-"""Parameter kinds: float / int = number between min and max, bool = on / off, choice = one of `choices`."""
+from . import curve
+
+KINDS = ("float", "int", "bool", "choice", "curve")
+"""
+Parameter kinds: float / int = number between min and max, bool = on / off, choice = one of `choices`,
+curve = tone curve (a list of [input, output] points, see engine/curve.py).
+"""
 
 ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 """Allowed effect ids and parameter keys."""
@@ -73,11 +78,13 @@ class Param:
     @param key      name in the values dict (lowercase, digits, _)
     @param label    English label (fallback of lang entry "effect.<id>.<key>")
     @param kind     one of KINDS
-    @param default  neutral / start value; for "choice" one of `choices`
+    @param default  neutral / start value; for "choice" one of `choices`; for "curve" a list of points (straight line if none)
     @param min      lowest value (float / int)
     @param max      highest value (float / int)
     @param step     slider step (float / int)
     @param choices  allowed values of a "choice" (texts)
+    @param group    name of the group the parameter is shown in ("" = always shown); the parameters of a group are
+                     shown one group at a time, chosen from a list, and must follow each other in `params`
     """
     key: str
     label: str
@@ -87,6 +94,7 @@ class Param:
     max: float = 100.0
     step: float = 1.0
     choices: Tuple[str, ...] = ()
+    group: str = ""
 
     def __post_init__(self):
         if not ID_RE.match(self.key):
@@ -97,9 +105,20 @@ class Param:
             raise EffectError("parameter %s: needs choices that contain the default" % self.key)
         if self.kind in ("float", "int") and not self.min <= self.default <= self.max:
             raise EffectError("parameter %s: default outside min..max" % self.key)
+        if self.kind == "curve":
+            start = self.default if isinstance(self.default, (list, tuple)) else curve.identity()
+            object.__setattr__(self, "default", tuple(tuple(point) for point in curve.normalize(start)))
+
+    def start(self) -> Any:
+        """@return a new copy of the neutral value (a curve is a list that the caller may change)"""
+        if self.kind == "curve":
+            return [list(point) for point in self.default]
+        return self.default
 
     def coerce(self, value: Any) -> Any:
         """@return value as this kind of parameter, limited to its range; the default if unusable"""
+        if self.kind == "curve":
+            return curve.normalize(value, self.default)
         if self.kind == "bool":
             return bool(value) if isinstance(value, (bool, int)) else self.default
         if self.kind == "choice":
@@ -162,7 +181,7 @@ class Effect(ABC):
 
     def defaults(self) -> Dict[str, Any]:
         """@return the neutral values of all parameters"""
-        return {p.key: p.default for p in self.params}
+        return {p.key: p.start() for p in self.params}
 
     def normalize(self, values: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
         """@return values with every parameter present and in range; unknown keys are dropped"""
@@ -206,6 +225,39 @@ class ChainEffect(Effect):
 
     def apply(self, g: GraphBuilder, source: str, v: Mapping[str, Any], ctx: RenderContext) -> str:
         return g.chain([source], self.filters(v, ctx))
+
+
+class LatticeEffect(Effect):
+    """
+    An effect that gives every pixel a new color by a rule that looks only at the color of that pixel (no neighbours,
+    no position): hue and saturation by color range, for example. A slow per pixel filter such as geq would need
+    seconds for one HD picture, so the rule runs once on a small lattice that holds every color instead: FFmpeg's
+    haldclutsrc makes the identity lattice (one picture of lattice_level ** 3 by lattice_level ** 3 pixels, one frame),
+    lattice_filters() changes it, and haldclut looks every pixel of the video up in it, with tetrahedral interpolation
+    between the lattice colors. The cost per frame is that of a lookup, whatever the rule is.
+    Subclasses write lattice_filters() and is_neutral().
+    """
+
+    lattice_level: ClassVar[int] = 6
+    """
+    Level of the lattice (2..16). The lattice has lattice_level ** 2 colors along each of its three axes, so 6 gives
+    36 and 7 gives 49, and the rule has to run on lattice_level ** 6 pixels: more levels follow sharp changes of
+    the rule better but make the preview slower.
+    """
+
+    @abstractmethod
+    def lattice_filters(self, v: Mapping[str, Any], ctx: RenderContext) -> List[str]:
+        """
+        @param v    checked values of all parameters (see normalize)
+        @param ctx  picture the effect runs on
+        @return     FFmpeg filters that change the identity lattice (an RGB picture) the way the effect should
+                    change every color of the video
+        """
+
+    def apply(self, g: GraphBuilder, source: str, v: Mapping[str, Any], ctx: RenderContext) -> str:
+        lattice = g.chain([], ["haldclutsrc=level=%d:rate=1:duration=1" % self.lattice_level]
+                          + list(self.lattice_filters(v, ctx)))
+        return g.chain([source, lattice], ["haldclut=interp=tetrahedral"])
 
 
 # --------------------------------------------------------------------------- #

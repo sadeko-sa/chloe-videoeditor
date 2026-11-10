@@ -47,9 +47,9 @@ Drop a module into `effect/` (every module not starting with `_` is imported at 
         def filters(self, v, ctx):
             return ["eq=gamma=%s" % num(v["value"])] if v["value"] != 1.0 else []
 
-`filters()` returns FFmpeg filter strings (`[]` = no change). `ctx.px()` converts pixel sizes for the smaller preview. Parameter kinds: float, int, bool, choice. Optional translations: `effect.<id>`, `effect.<id>.<param>`, `choice.<id>.<param>.<value>`, `category.<category>` in `lang/*.json`; without them the English texts are used. A broken plugin is skipped and listed in Settings > About.
+`filters()` returns FFmpeg filter strings (`[]` = no change). `ctx.px()` converts pixel sizes for the smaller preview. Parameter kinds: float, int, bool, choice, curve (a tone curve: a list of `[input, output]` points 0..1; all curve parameters of an effect share one curve editor, see `effect/curves.py`). Optional translations: `effect.<id>`, `effect.<id>.<param>`, `choice.<id>.<param>.<value>`, `category.<category>` in `lang/*.json`; without them the English texts are used. A broken plugin is skipped and listed in Settings > About.
 
-An effect that needs branches (for example a blurred copy that is blended back) extends `Effect` instead and implements `is_neutral(v, ctx)` and `apply(g, source, v, ctx)`. `g` is a `GraphBuilder` (`chain()` adds a chain of filters, `split()` copies a picture), `source` the label of the picture and the result is the label of the changed one. `Clarity` in `effect/detail.py` is an example.
+An effect that needs branches (for example a blurred copy that is blended back) extends `Effect` instead and implements `is_neutral(v, ctx)` and `apply(g, source, v, ctx)`. `g` is a `GraphBuilder` (`chain()` adds a chain of filters, `split()` copies a picture), `source` the label of the picture and the result is the label of the changed one. `Clarity` in `effect/detail.py` is an example. An effect that changes every pixel by a rule that depends only on that pixel's own color (hue and saturation by color range) extends `LatticeEffect` and implements `is_neutral(v, ctx)` and `lattice_filters(v, ctx)`: the rule runs once on a small lattice of all colors and `haldclut` looks every pixel up in it, so even a slow `geq` rule costs about as much as a lookup per frame. `HueSaturation` in `effect/hue_saturation.py` is an example.
 
 ## Languages and themes
 
@@ -59,9 +59,9 @@ An effect that needs branches (for example a blurred copy that is blended back) 
 
     chloe_videoeditor.py   entry point
     lang.py, theme.py   language and theme support (shared with Chloe Photoviewer)
-    engine/   effect.py (effect interfaces + registry), project.py, compiler.py, ffmpeg.py, jobs.py (job queue + workers), preview.py, config.py  (no Tk)
-    ui/       app.py, panels.py, dialogs.py, jobs.py (job queue window), common.py
-    effect/  color.py, detail.py, style.py
+    engine/   effect.py (effect interfaces + registry), curve.py (tone curve maths), project.py, compiler.py, ffmpeg.py, jobs.py (job queue + workers), preview.py, config.py  (no Tk)
+    ui/       app.py, panels.py, curve_editor.py, dialogs.py, jobs.py (job queue window), common.py
+    effect/  color.py, curves.py, detail.py, hue_saturation.py, style.py
     lang/  theme/
 
 The config `config.json` and, by default, the preview cache (`cache/`, emptied on exit) are saved next to the program; nothing is written to AppData or the home folder. Only `config.json` is read (an old `chloe_videoeditor.json` is ignored, so copy its content over if you want to keep it). The cache can be moved to any folder in Settings > General > Cache folder (empty = `cache/` next to the program); it is used at once and only `run_` folders made by this program are ever removed there.

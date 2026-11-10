@@ -8,7 +8,9 @@ from lang import t
 from engine import effect as fx
 from engine import preset as pr
 from engine.project import FITS, MediaLayer
-from ui.common import Tip, category_label, choice_label, effect_name, fmt_number, highlight_fade, param_label
+from ui.common import (Tip, category_label, choice_label, effect_name, fmt_number, group_label, highlight_fade,
+                       param_label)
+from ui.curve_editor import CurveEditor
 
 ON, OFF = "\u2611", "\u2610"
 WARN = "\u26A0 "
@@ -167,7 +169,11 @@ class PropertiesPanel(ttk.LabelFrame):
 
 
 class ParamEditor(ttk.Frame):
-    """Sliders / check boxes / lists for the parameters of one effect instance (built from its Param list)."""
+    """
+    Sliders / check boxes / lists for the parameters of one effect instance (built from its Param list). The curve
+    parameters of an effect together become one curve editor, and parameters with the same Param.group are shown one
+    group at a time, chosen from a list.
+    """
 
     def __init__(self, parent, app):
         super().__init__(parent)
@@ -186,23 +192,80 @@ class ParamEditor(ttk.Frame):
             ttk.Label(self, text=t("msg.effect_missing", id=inst.effect_id), wraplength=260).grid(row=0, column=0)
             return
         values = eff.normalize(inst.values)
-        for row, param in enumerate(eff.params):
-            label = ttk.Label(self, text=param_label(eff, param), wraplength=110, justify="left")
-            label.grid(row=row, column=0, sticky="w", pady=3)
-            send = lambda key, value, _l=layer.id, _i=index: self.app.set_param(_l, _i, key, value)
-            if param.kind in ("float", "int"):
-                self._slider(row, label, param, values[param.key], send)
-            elif param.kind == "bool":
-                var = tk.BooleanVar(value=values[param.key])
-                ttk.Checkbutton(self, variable=var,
-                                command=lambda p=param, v=var: send(p.key, bool(v.get()))).grid(row=row, column=1, sticky="w")
-            else:
-                box = ttk.Combobox(self, state="readonly", width=16,
-                                   values=[choice_label(eff, param, c) for c in param.choices])
-                box.current(param.choices.index(values[param.key]))
-                box.grid(row=row, column=1, columnspan=2, sticky="w")
-                box.bind("<<ComboboxSelected>>",
-                         lambda e, p=param, b=box: send(p.key, p.choices[max(b.current(), 0)]))
+        send = lambda key, value, _l=layer.id, _i=index: self.app.set_param(_l, _i, key, value)
+        curves = [p for p in eff.params if p.kind == "curve"]
+        row = 0
+        groups, counts = {}, {}
+        for param in eff.params:
+            if param.kind == "curve":
+                if param is curves[0]:                  # all curves of an effect share one editor with a channel list
+                    CurveEditor(self, [(p.key, param_label(eff, p), values[p.key]) for p in curves],
+                                send).grid(row=row, column=0, columnspan=3, sticky="w", pady=3)
+                    row += 1
+                continue
+            if not param.group:
+                self._param(eff, param, values, send, row)
+                row += 1
+                continue
+            if not groups:                              # the list of groups takes the row before the first group
+                list_row = row
+                first_row = row + 1
+            offset = counts.get(param.group, 0)
+            counts[param.group] = offset + 1
+            before = set(self.winfo_children())
+            self._param(eff, param, values, send, first_row + offset)
+            groups.setdefault(param.group, []).extend(w for w in self.winfo_children() if w not in before)
+            row = first_row + max(counts.values())
+        if groups:
+            self._group_list(eff, list_row, groups)
+
+    def _group_list(self, eff, row, groups):
+        """
+        Put the list of parameter groups at `row`; only the widgets of the chosen group are shown.
+        @param eff     effect whose groups these are
+        @param row     grid row of the list
+        @param groups  group name -> widgets of its parameters, all placed on the same rows
+        """
+        names = list(groups)
+        box = ttk.Combobox(self, state="readonly", width=16, values=[group_label(eff, n) for n in names])
+        box.grid(row=row, column=0, columnspan=3, sticky="w", pady=3)
+
+        def choose(_event=None):
+            for index, name in enumerate(names):
+                for widget in groups[name]:
+                    if index == max(box.current(), 0):
+                        widget.grid()
+                    else:
+                        widget.grid_remove()
+
+        box.current(0)
+        box.bind("<<ComboboxSelected>>", choose)
+        choose()
+
+    def _param(self, eff, param, values, send, row):
+        """
+        Label and editing widget of one parameter at a grid row.
+        @param eff     effect of the parameter
+        @param param   the parameter (not a curve)
+        @param values  checked values of the effect
+        @param send    function(key, value) that stores a changed value
+        @param row     grid row
+        """
+        label = ttk.Label(self, text=param_label(eff, param), wraplength=110, justify="left")
+        label.grid(row=row, column=0, sticky="w", pady=3)
+        if param.kind in ("float", "int"):
+            self._slider(row, label, param, values[param.key], send)
+        elif param.kind == "bool":
+            var = tk.BooleanVar(value=values[param.key])
+            ttk.Checkbutton(self, variable=var,
+                            command=lambda p=param, v=var: send(p.key, bool(v.get()))).grid(row=row, column=1, sticky="w")
+        else:
+            box = ttk.Combobox(self, state="readonly", width=16,
+                               values=[choice_label(eff, param, c) for c in param.choices])
+            box.current(param.choices.index(values[param.key]))
+            box.grid(row=row, column=1, columnspan=2, sticky="w")
+            box.bind("<<ComboboxSelected>>",
+                     lambda e, p=param, b=box: send(p.key, p.choices[max(b.current(), 0)]))
 
     def _slider(self, row, label, param, value, send):
         """Slider + typed value. Double click on the label resets the parameter to its default."""

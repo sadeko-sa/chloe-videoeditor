@@ -64,6 +64,11 @@ def param_label(eff, param):
     return text_or("effect.%s.%s" % (eff.id, param.key), param.label)
 
 
+def group_label(eff, group):
+    """@return the text of a parameter group of an effect (lang key effect.<id>.group.<group>, else the group name)"""
+    return text_or("effect.%s.group.%s" % (eff.id, group), group)
+
+
 def choice_label(eff, param, value):
     return text_or("choice.%s.%s.%s" % (eff.id, param.key, value), str(value))
 
