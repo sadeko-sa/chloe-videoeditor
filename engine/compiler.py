@@ -36,6 +36,8 @@ class Job:
     @param graph     the -filter_complex text
     @param video     label of the finished picture
     @param audio     label of the mixed audio, None if there is none
+    @param audio_source  input arguments (["-ss", .., "-t", .., "-i", file]) of the one audio track that can be
+                     copied as it is (one clip with sound, volume 100 %, no denoise, starts at 0); None if not possible
     @param prefix    label of the picture after the first `tap` layers (frame jobs only), else None
     @param duration  length of the result in seconds
     """
@@ -43,6 +45,7 @@ class Job:
     graph: str = ""
     video: str = ""
     audio: Optional[str] = None
+    audio_source: Optional[List[str]] = None
     prefix: Optional[str] = None
     duration: float = 0.0
 
@@ -202,6 +205,7 @@ def compile_export(project: Project) -> Job:
     job, g = Job(duration=total), _Graph()
     current = g.chain([], _canvas(width, height, fps, total))
     sounds: List[str] = []
+    copyable: List[Optional[List[str]]] = []
     for layer in project.layers:
         if not layer.enabled:
             continue
@@ -223,6 +227,8 @@ def compile_export(project: Project) -> Job:
                 # recording); the noise is tracked and its residue removed, so the floor is only the start value
                 amount = layer.audio_denoise
                 clean = ["afftdn=nr=%s:nf=%s:nt=w:tn=1:tr=1" % (num(max(amount * 30, 0.01), 2), num(-60 + 35 * amount, 1))] if amount > 0 else []
+                plain = layer.volume == 1.0 and amount <= 0 and delay == 0
+                copyable.append(list(job.inputs[index]) if plain else None)
                 sounds.append(g.chain(["%d:a" % index], [
                     "asetpts=PTS-STARTPTS", "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo"]
                     + clean + ["volume=%s" % num(layer.volume)] + tail))
@@ -241,6 +247,8 @@ def compile_export(project: Project) -> Job:
         job.audio = sounds[0]
     elif sounds:
         job.audio = g.chain(sounds, ["amix=inputs=%d:normalize=0:duration=longest" % len(sounds)])
+    if len(sounds) == 1 and copyable and copyable[0]:
+        job.audio_source = copyable[0]
     job.graph = g.text()
     return job
 

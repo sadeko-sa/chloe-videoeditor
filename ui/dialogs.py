@@ -1,4 +1,4 @@
-"""ui/dialogs.py - Settings, project settings and export dialogs."""
+"""ui/dialogs.py - Settings, about and project settings dialogs."""
 
 import os
 import sys
@@ -10,12 +10,10 @@ from theme import ThemeDialog, list_themes, resolve_theme
 
 from engine import APP_NAME, VERSION
 from engine import effect as fx
-from engine import ffmpeg as ff
-from engine.compiler import CompileError, compile_export
 from engine.config import PREVIEW_RANGE, config_path
-from engine.jobs import THREADS_RANGE, WORKERS_RANGE, QueueError
+from engine.jobs import THREADS_RANGE, WORKERS_RANGE
 from engine.project import even
-from ui.common import Dialog, buttons_row, fmt_number, fmt_time, ok_cancel, parse_time
+from ui.common import Dialog, fmt_number, fmt_time, ok_cancel, parse_time
 
 
 def _int(text, lo, hi, default):
@@ -318,94 +316,4 @@ class GotoDialog(Dialog):
             self.bell()                                     # not a time / frame: stay open so it can be fixed
             return
         self.result = seconds
-        self.destroy()
-
-
-class ExportDialog(Dialog):
-    """Pick format, quality and file; OK puts the export into the queue (result True) and closes."""
-
-    def __init__(self, app):
-        super().__init__(app.root, "dlg.export")
-        self.app = app
-        self.presets = ff.available_presets(app.tools)
-        cfg = app.cfg
-        frm = ttk.Frame(self, padding=14)
-        frm.pack(fill="both", expand=True)
-        frm.columnconfigure(1, weight=1)
-        codes = list(self.presets)
-        self.format_var, self.quality_var, self.path_var = tk.StringVar(), tk.StringVar(), tk.StringVar()
-        ttk.Label(frm, text=t("field.format")).grid(row=0, column=0, sticky="w", pady=4)
-        self.format_box = ttk.Combobox(frm, textvariable=self.format_var, state="readonly",
-                                       values=[self.presets[c].label for c in codes], width=24)
-        self.format_box.grid(row=0, column=1, sticky="w", padx=(12, 0))
-        self.format_box.current(codes.index(cfg["export_format"]) if cfg["export_format"] in codes else 0)
-        self.format_box.bind("<<ComboboxSelected>>", self._format_changed)
-        ttk.Label(frm, text=t("field.quality")).grid(row=1, column=0, sticky="w", pady=4)
-        self.quality_box = ttk.Combobox(frm, textvariable=self.quality_var, state="readonly", width=24,
-                                        values=[t("quality." + q) for q in ff.QUALITIES])
-        self.quality_box.grid(row=1, column=1, sticky="w", padx=(12, 0))
-        self.quality_box.current(ff.QUALITIES.index(cfg["export_quality"]))
-        ttk.Label(frm, text=t("field.output")).grid(row=2, column=0, sticky="w", pady=4)
-        self.path_entry = ttk.Entry(frm, textvariable=self.path_var, width=44)
-        self.path_entry.grid(row=2, column=1, sticky="we", padx=(12, 4))
-        ttk.Button(frm, text=t("btn.pick"), command=self._pick).grid(row=2, column=2)
-        project = app.project
-        ttk.Label(frm, text=t("export.info", width=project.width, height=project.height,
-                              fps=fmt_number(project.fps, 3), seconds=fmt_number(project.duration(), 2))).grid(
-            row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
-        buttons_row(frm, ("btn.queue", lambda: self._ok("add")), ("btn.start", lambda: self._ok("start")),
-                    ("btn.cancel", self.destroy)).grid(row=4, column=0, columnspan=3, sticky="we", pady=(12, 0))
-        self._format_changed()
-        self.show(self.path_entry, lambda: self._ok("add"))
-
-    def _preset_code(self):
-        i = self.format_box.current()
-        return list(self.presets)[max(i, 0)]
-
-    def _format_changed(self, _event=None):
-        """Keep the file extension in step with the format."""
-        path = self.path_var.get()
-        ext = self.presets[self._preset_code()].ext
-        if not path:
-            base = os.path.splitext(os.path.basename(self.app.project_path or ""))[0] or "video"
-            folder = self.app.cfg["last_dir"] or os.path.expanduser("~")
-            path = os.path.join(folder, base + ext)
-        self.path_var.set(os.path.splitext(path)[0] + ext)
-
-    def _pick(self):
-        preset = self.presets[self._preset_code()]
-        path = filedialog.asksaveasfilename(parent=self, title=t("dlg.export"), defaultextension=preset.ext,
-                                            initialfile=os.path.basename(self.path_var.get()),
-                                            initialdir=os.path.dirname(self.path_var.get()) or None,
-                                            filetypes=[(preset.label, "*" + preset.ext)])
-        if path:
-            self.path_var.set(path)
-
-    def _ok(self, action):
-        """
-        Compile the project as it is now and queue the export.
-
-        @param action  "add" puts the job in the queue; "start" also starts the queue
-        """
-        app, path = self.app, self.path_var.get().strip()
-        if not path:
-            messagebox.showerror(t("dlg.error"), t("msg.output_required"), parent=self)
-            return
-        if os.path.exists(path) and not messagebox.askyesno(t("dlg.export"), t("msg.overwrite", name=os.path.basename(path)),
-                                                            parent=self):
-            return
-        try:
-            job = compile_export(app.project)
-        except CompileError as exc:
-            messagebox.showerror(t("dlg.error"), str(exc), parent=self)
-            return
-        code, quality = self._preset_code(), ff.QUALITIES[max(self.quality_box.current(), 0)]
-        try:
-            app.jobs.add(ff.Export(app.tools, job, self.presets[code], quality, path))
-        except QueueError:
-            messagebox.showerror(t("dlg.error"), t("msg.job_duplicate", name=os.path.basename(path)), parent=self)
-            return
-        app.cfg.update(export_format=code, export_quality=quality, last_dir=os.path.dirname(path))
-        app.save_config()
-        self.result, self.queued_name = action, os.path.basename(path)
         self.destroy()

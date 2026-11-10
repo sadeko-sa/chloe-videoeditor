@@ -15,9 +15,10 @@ import sys
 import threading
 from dataclasses import dataclass
 from fractions import Fraction
-from typing import Callable, Dict, FrozenSet, List, Optional
+from typing import Callable, FrozenSet, List, Optional
 
 from .compiler import Job
+from .encode import COPY_AUDIO, ExportOptions
 from .project import IMAGE_EXTS, IMAGE_SECONDS, MediaInfo
 
 IS_WIN = os.name == "nt"
@@ -26,6 +27,9 @@ APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 MIN_VERSION = (4, 4)
 """Oldest FFmpeg the filters of this program are written for."""
+
+_SCALED = "chloe_out"
+"""Label of the picture after the output scaling filter."""
 
 
 class FFmpegError(Exception):
@@ -39,31 +43,6 @@ class Tools:
     ffprobe: str
     version: str
     encoders: FrozenSet[str]
-
-
-@dataclass(frozen=True)
-class Preset:
-    """One export format: container, video encoder, quality (CRF per level), extra options, audio encoder."""
-    label: str
-    ext: str
-    encoder: str
-    crf: Dict[str, int]
-    video: tuple
-    audio: tuple
-
-
-PRESETS: Dict[str, Preset] = {
-    "h264": Preset("H.264 (MP4)", ".mp4", "libx264", {"high": 17, "medium": 21, "low": 26},
-                   ("-preset", "medium", "-pix_fmt", "yuv420p", "-movflags", "+faststart"),
-                   ("-c:a", "aac", "-b:a", "192k")),
-    "h265": Preset("H.265 (MP4)", ".mp4", "libx265", {"high": 21, "medium": 25, "low": 30},
-                   ("-preset", "medium", "-pix_fmt", "yuv420p", "-tag:v", "hvc1", "-movflags", "+faststart"),
-                   ("-c:a", "aac", "-b:a", "192k")),
-    "vp9": Preset("VP9 (WebM)", ".webm", "libvpx-vp9", {"high": 24, "medium": 31, "low": 38},
-                  ("-b:v", "0", "-row-mt", "1", "-pix_fmt", "yuv420p"),
-                  ("-c:a", "libopus", "-b:a", "160k")),
-}
-QUALITIES = ("high", "medium", "low")
 
 
 # --------------------------------------------------------------------------- #
@@ -195,11 +174,6 @@ def too_old(tools: Tools) -> bool:
     return ver != (0, 0) and ver < MIN_VERSION
 
 
-def available_presets(tools: Tools) -> Dict[str, Preset]:
-    """@return the export formats whose encoder this FFmpeg has"""
-    return {k: p for k, p in PRESETS.items() if p.encoder in tools.encoders}
-
-
 # --------------------------------------------------------------------------- #
 # Probing
 # --------------------------------------------------------------------------- #
@@ -289,16 +263,16 @@ class Export:
     """
     One export, run by the caller's thread (the job queue of engine/jobs.py runs it in a worker).
 
-        export = Export(tools, graph_job, preset, "medium", "out.mp4", on_progress)
+        export = Export(tools, graph_job, options, "out.mp4", on_progress)
         error = export.run(threads=2)           # blocks; export.cancel() from another thread stops it
 
-    on_progress(fraction 0..1) is called from the thread that runs the export.
-    The video is written to a temporary name and renamed when it is complete.
+    on_progress(fraction 0..1) is called from the thread that runs the export. A two-pass export reports
+    the first pass as the first half. The video is written to a temporary name and renamed when it is complete.
     """
 
-    def __init__(self, tools: Tools, job: Job, preset: Preset, quality: str, out_path: str,
+    def __init__(self, tools: Tools, job: Job, options: ExportOptions, out_path: str,
                  on_progress: Optional[Callable[[float], None]] = None):
-        self.tools, self.job, self.preset, self.quality = tools, job, preset, quality
+        self.tools, self.job, self.options = tools, job, options
         self.out_path, self.on_progress = out_path, on_progress
         self._proc: Optional[subprocess.Popen] = None
         self._cancelled = False
@@ -341,66 +315,110 @@ class Export:
         with self._lock:
             self._proc, self._cancelled, self._paused = None, False, False
 
-    def command(self, target: str, threads: int = 0) -> List[str]:
+    def commands(self, target: str, threads: int = 0) -> List[List[str]]:
         """
-        @param target   file the command writes to
+        @param target   file the last command writes to
         @param threads  thread limit for decoding, filtering and encoding; 0 = FFmpeg decides
-        @return         the full FFmpeg command line
+        @return         the FFmpeg command lines in the order they run (two for a two-pass export, else one)
+        @raise ValueError if the extra options of the export cannot be split
         """
-        job, p = self.job, self.preset
+        job, o = self.job, self.options
+        graph, picture = job.graph, job.video
+        if o.height:
+            graph += ";[%s]scale=-2:%d:flags=lanczos,setsar=1[%s]" % (picture, o.height, _SCALED)
+            picture = _SCALED
         limit = ["-threads:v", str(threads)] if threads > 0 else []
-        args = _base(self.tools) + ["-progress", "pipe:1", "-nostats"]
+        head = _base(self.tools) + ["-progress", "pipe:1", "-nostats"]
         if threads > 0:
-            args += ["-filter_complex_threads", str(threads)]
+            head += ["-filter_complex_threads", str(threads)]
         for item in job.inputs:
-            args += limit + item
-        args += ["-filter_complex", job.graph, "-map", "[%s]" % job.video]
-        args += ["-c:v", p.encoder] + limit + ["-crf", str(p.crf[self.quality])] + list(p.video)
-        if job.audio:
-            args += ["-map", "[%s]" % job.audio] + list(p.audio)
+            head += limit + item
+        copy = o.audio == COPY_AUDIO
+        if copy and not job.audio_source:
+            raise ValueError("the audio cannot be copied: it needs exactly one clip with sound, unchanged")
+        if copy:
+            head += job.audio_source                    # the same file once more, only for its audio stream
+        head += ["-filter_complex", graph, "-map", "[%s]" % picture]
+        video, extra, length = o.video_args(threads), o.extra_args(), ["-t", "%.6f" % job.duration]
+        if copy:
+            audio = ["-map", "%d:a:0" % len(job.inputs)] + o.audio_args(True)
         else:
-            args += ["-an"]
-        return args + ["-t", "%.6f" % job.duration, target]
+            audio = (["-map", "[%s]" % job.audio] if job.audio else []) + o.audio_args(bool(job.audio))
+        final = head + video + o.container_args() + audio + extra
+        if not o.two_pass:
+            return [final + length + [target]]
+        log = ["-passlogfile", self._pass_log(target)]
+        return [head + video + extra + ["-pass", "1"] + log + ["-an"] + length + ["-f", "null", "-"],
+                final + ["-pass", "2"] + log + length + [target]]
+
+    @staticmethod
+    def _pass_log(target: str) -> str:
+        """@return the file name start of the first-pass statistics (next to the target, unique per export)"""
+        return os.path.splitext(target)[0] + "-pass"
 
     def run(self, threads: int = 0) -> Optional[str]:
         """
         Render the project into the output file and wait until FFmpeg is done.
 
-        @param threads  see command()
+        @param threads  see commands()
         @return         None if it finished or was cancelled (see `cancelled`), else the error text
         """
         root, ext = os.path.splitext(self.out_path)
         target = root + ".chloe-tmp" + ext
         error: Optional[str] = None
-        lines: List[str] = []
         try:
-            with self._lock:
-                if self._cancelled:
-                    return None
-                self._proc = popen(self.command(target, threads), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                   universal_newlines=True, encoding="utf-8", errors="replace")
-                if self._paused:
-                    _suspend(self._proc, True)
-            for line in self._proc.stdout:
-                m = re.match(r"out_time_(?:us|ms)=(\d+)", line)
-                if m:
-                    if self.on_progress:
-                        self.on_progress(min(int(m.group(1)) / 1e6 / self.job.duration, 1.0))
-                elif "=" not in line.split(" ")[0]:
-                    lines.append(line)
-            self._proc.wait()
-            if self._cancelled:
-                error = None
-            elif self._proc.returncode != 0:
-                error = _tail("".join(lines))
+            commands = self.commands(target, threads)
+            for number, args in enumerate(commands):
+                error = self._run_pass(args, number / len(commands), (number + 1) / len(commands))
+                if error or self._cancelled:
+                    break
             else:
                 os.replace(target, self.out_path)
         except OSError as exc:
             error = str(exc)
         finally:
-            if os.path.exists(target):
-                try:
-                    os.remove(target)
-                except OSError:
-                    pass
+            self._clean_up(target)
         return error
+
+    def _run_pass(self, args: List[str], first: float, last: float) -> Optional[str]:
+        """
+        Run one FFmpeg command and wait for it.
+
+        @param first  progress of the whole export when this command starts
+        @param last   progress of the whole export when it ends
+        @return       None if it finished or was cancelled, else the error text
+        """
+        lines: List[str] = []
+        with self._lock:
+            if self._cancelled:
+                return None
+            proc = self._proc = popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                      universal_newlines=True, encoding="utf-8", errors="replace")
+            if self._paused:
+                _suspend(proc, True)
+        for line in proc.stdout:
+            m = re.match(r"out_time_(?:us|ms)=(\d+)", line)
+            if m:
+                if self.on_progress:
+                    done = min(int(m.group(1)) / 1e6 / self.job.duration, 1.0)
+                    self.on_progress(first + (last - first) * done)
+            elif "=" not in line.split(" ")[0]:
+                lines.append(line)
+        proc.wait()
+        if self._cancelled or proc.returncode == 0:
+            return None
+        return _tail("".join(lines))
+
+    def _clean_up(self, target: str) -> None:
+        """Remove the temporary file and the first-pass statistics, whatever happened."""
+        folder = os.path.dirname(target) or "."
+        stats = os.path.basename(self._pass_log(target))
+        try:
+            names = [n for n in os.listdir(folder) if n.startswith(stats)] if self.options.two_pass else []
+        except OSError:
+            names = []
+        for path in [target] + [os.path.join(folder, n) for n in names]:
+            try:
+                os.remove(path)
+            except OSError:
+                pass

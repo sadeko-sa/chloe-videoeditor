@@ -155,7 +155,7 @@ class JobRow:
         """Show the current state of the job."""
         color = window.color(job.state)
         self.name.configure(text=job.name)
-        self.fmt.configure(text="%s, %s" % (job.export.preset.label, t("quality." + job.export.quality)))
+        self.fmt.configure(text=job.export.options.summary())
         self.status.configure(text=t("job." + job.state.value), foreground=color or "")
         self.worker.configure(text=str(job.worker) if job.worker else "")
         self.bar.show(job.progress, color or self._bg, "%d%%" % int(job.progress * 100))
@@ -331,7 +331,7 @@ class JobsWindow(tk.Toplevel):
         size = os.path.getsize(job.out_path) if job.state is JobState.DONE and os.path.exists(job.out_path) else None
         values = {
             "file": job.out_path,
-            "format": "%s, %s" % (export.preset.label, t("quality." + export.quality)),
+            "format": export.options.summary(),
             "length": fmt_time(export.job.duration),
             "state": t("job." + job.state.value),
             "worker": str(job.worker) if job.worker else "",
@@ -362,7 +362,8 @@ class JobsWindow(tk.Toplevel):
         if job is None:
             return
         self.clipboard_clear()
-        self.clipboard_append(_command_line(job.export.command(job.out_path, self.app.jobs.threads)))
+        commands = job.export.commands(job.out_path, self.app.jobs.threads)
+        self.clipboard_append("\n".join(_command_line(args) for args in commands))
 
     def show_menu(self, job_id, event):
         """

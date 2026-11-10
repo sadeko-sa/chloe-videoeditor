@@ -13,6 +13,7 @@ from lang import list_languages, resolve_language, set_language, t
 from theme import ThemeDialog, apply_theme, list_themes, resolve_color, resolve_theme, set_theme
 
 from engine import APP_NAME, VERSION
+from engine import encode as enc
 from engine import ffmpeg as ff
 from engine import preset as pr
 from engine.compiler import CompileError
@@ -22,7 +23,8 @@ from engine.preview import PreviewEngine, save_frame
 from engine.project import (PROJECT_EXT, AdjustmentLayer, EffectInstance, History, MediaLayer, Project, ProjectError,
                             even, load_project, save_project)
 from ui.common import IS_WIN, Tip, fmt_frame_name, fmt_time
-from ui.dialogs import AboutDialog, ExportDialog, GotoDialog, ProjectDialog, SettingsDialog
+from ui.dialogs import AboutDialog, GotoDialog, ProjectDialog, SettingsDialog
+from ui.export import ExportDialog
 from ui.jobs import JobsWindow
 from ui.panels import EffectPanel, LayerPanel, PropertiesPanel
 from ui.preset import NameDialog, PresetManager
@@ -1114,7 +1116,7 @@ class App:
             messagebox.showwarning(t("dlg.error"), t("msg.no_ffmpeg"), parent=self.root)
         elif self.project.duration() <= 0:
             messagebox.showinfo(t("dlg.export"), t("msg.nothing_to_export"), parent=self.root)
-        elif not ff.available_presets(self.tools):
+        elif not enc.containers(self.tools.encoders):
             messagebox.showerror(t("dlg.error"), t("msg.no_encoder"), parent=self.root)
         else:
             dlg = ExportDialog(self)
