@@ -252,8 +252,18 @@ class ParamEditor(ttk.Frame):
         @param send    function(key, value) that stores a changed value
         @param row     grid row
         """
+        before = set(self.winfo_children())
         label = ttk.Label(self, text=param_label(eff, param), wraplength=110, justify="left")
         label.grid(row=row, column=0, sticky="w", pady=3)
+        self._param_widgets(eff, param, values, send, row, label)
+        tip = "tip.effect.%s.%s" % (eff.id, param.key)           # optional explanation, see the language files
+        if t(tip) != tip:
+            for widget in self.winfo_children():
+                if widget not in before:
+                    Tip(widget, tip)
+
+    def _param_widgets(self, eff, param, values, send, row, label):
+        """The editing widget of one parameter (slider, check box or list) next to its `label`."""
         if param.kind in ("float", "int"):
             self._slider(row, label, param, values[param.key], send)
         elif param.kind == "bool":

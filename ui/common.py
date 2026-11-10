@@ -181,7 +181,10 @@ def highlight_fade(label, entry, hold=100, fade=350, step=30):
 
 
 class Tip:
-    """Small tooltip for a widget; the text is the language entry `key`."""
+    """Small tooltip above a widget; the text is the language entry `key` (long text wraps, "\\n" = new line)."""
+
+    WRAP = 320
+    """Width in pixels at which a long tooltip text is wrapped."""
 
     def __init__(self, widget, key):
         self.widget, self.key, self.job, self.win = widget, key, None, None
@@ -195,10 +198,18 @@ class Tip:
 
     def _show(self):
         self.job = None
+        if not self.widget.winfo_exists():                    # the panel was rebuilt while the timer ran
+            return
         self.win = tk.Toplevel(self.widget)
         self.win.wm_overrideredirect(True)
-        tk.Label(self.win, text=t(self.key), relief="solid", bd=1, padx=5, pady=2).pack()
-        self.win.wm_geometry("+%d+%d" % (self.widget.winfo_rootx(), max(self.widget.winfo_rooty() - 30, 0)))
+        tk.Label(self.win, text=t(self.key), relief="solid", bd=1, padx=5, pady=2,
+                 wraplength=self.WRAP, justify="left").pack()
+        self.win.update_idletasks()
+        x = min(self.widget.winfo_rootx(), self.widget.winfo_screenwidth() - self.win.winfo_reqwidth())
+        y = self.widget.winfo_rooty() - self.win.winfo_reqheight() - 4
+        if y < 0:                                             # no room above: below instead
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
+        self.win.wm_geometry("+%d+%d" % (max(x, 0), y))
 
     def _hide(self, _event=None):
         if self.job:
