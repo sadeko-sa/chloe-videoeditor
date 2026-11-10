@@ -159,7 +159,8 @@ class Denoise(ChainEffect):
 
     Method: hqdn3d (fast), fftdnoiz (good, frequency domain) or nlmeans (best, non-local means, about 3 times
     slower). Strength: Ultralight, Light, Medium or Strong, from the preset table above. Spatial (%) and
-    Temporal (%) then scale the preset's two parts, 100 = the preset as it is, 0 = leave that part out.
+    Temporal (%) then adjust the preset's two parts from -100 to 100: 0 = the preset as it is, -100 = leave that
+    part out, +100 = twice the preset (stored as "spatial_adj" / "temporal_adj").
 
     Spatial smoothing works inside each picture, temporal smoothing across neighbouring pictures: it removes
     flicker and grain in still areas, does nothing on a moving area, and on a single still frame only the spatial
@@ -176,8 +177,8 @@ class Denoise(ChainEffect):
     category = "detail"
     params = (Param("method", "Method", "choice", "hqdn3d", choices=_DENOISE_METHODS),
               Param("strength", "Strength", "choice", "off", choices=_DENOISE_STRENGTHS),
-              Param("spatial", "Spatial (%)", "float", 100, 0, 200, 1),
-              Param("temporal", "Temporal (%)", "float", 100, 0, 200, 1))
+              Param("spatial_adj", "Spatial (%)", "float", 0, -100, 100, 1),
+              Param("temporal_adj", "Temporal (%)", "float", 0, -100, 100, 1))
 
     def normalize(self, values):
         """
@@ -195,6 +196,10 @@ class Denoise(ChainEffect):
             percent = luma / ladder[nearest][0] * 100
             for key, value in (("method", "hqdn3d"), ("strength", nearest), ("spatial", percent), ("temporal", percent)):
                 values.setdefault(key, value)
+        for key in ("spatial", "temporal"):                              # projects from before: 0..200, 100 = preset
+            before = values.get(key)
+            if key + "_adj" not in values and isinstance(before, (int, float)) and not isinstance(before, bool):
+                values[key + "_adj"] = before - 100
         return super().normalize(values)
 
     def filters(self, v, ctx):
@@ -207,8 +212,8 @@ class Denoise(ChainEffect):
         step = _DENOISE_LADDER[v["method"]].get(v["strength"])
         if not step:
             return []
-        spatial = step[0] * v["spatial"] / 100
-        temporal = step[1] * v["temporal"] / 100
+        spatial = step[0] * (100 + v["spatial_adj"]) / 100
+        temporal = step[1] * (100 + v["temporal_adj"]) / 100
         if v["method"] == "hqdn3d":
             return [_hqdn3d(spatial, temporal)] if spatial > 0 or temporal > 0 else []
         filters = [_hqdn3d(0, temporal)] if temporal > 0 else []
