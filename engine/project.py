@@ -153,6 +153,7 @@ class MediaLayer(Layer):
     is_image: bool = False
     fit: str = "fit"
     volume: float = 1.0
+    audio_denoise: float = 0.0
     kind: ClassVar[str] = "media"
 
     def is_missing(self) -> bool:
@@ -162,7 +163,8 @@ class MediaLayer(Layer):
     def to_dict(self) -> Dict[str, Any]:
         data = super().to_dict()
         data.update(path=self.path, in_point=self.in_point, source_duration=self.source_duration,
-                    has_audio=self.has_audio, is_image=self.is_image, fit=self.fit, volume=self.volume)
+                    has_audio=self.has_audio, is_image=self.is_image, fit=self.fit, volume=self.volume,
+                    audio_denoise=self.audio_denoise)
         return data
 
     @classmethod
@@ -176,6 +178,7 @@ class MediaLayer(Layer):
         layer.in_point = _number(data.get("in_point"), 0.0, 0.0, 1e6)
         layer.fit = data.get("fit") if data.get("fit") in FITS else "fit"
         layer.volume = _number(data.get("volume"), 1.0, 0.0, 2.0)
+        layer.audio_denoise = _number(data.get("audio_denoise"), 0.0, 0.0, 1.0)
         if layer.duration <= 0:
             layer.duration = max(layer.source_duration - layer.in_point, 0.1) if not layer.is_image else IMAGE_SECONDS
         return layer

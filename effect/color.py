@@ -55,9 +55,20 @@ def _ch(c):
     return "(%s(X,Y)/255)" % c
 
 
+_BRIGHTNESS_STOPS = 2.0
+"""Brightness at slider +-100 moves the middle gray (0.5) of the picture to 0.8 (up) or 0.2 (down): the middle is
+pushed by 2 steps of the curve in _brightness_curve."""
+
+
 @register
 class Brightness(ChainEffect):
-    """Brightness: positive multiplies the picture, negative subtracts a lift."""
+    """
+    Brightness: bows the tone curve, keeps black and white fixed. Every picture value x (0..1) goes to
+    x / (x + (1 - x) * 2^-s) with s = amount * 2 / 100: a Moebius curve that only rises, runs through (0,0) and
+    (1,1), moves the midtones most and the shadows and highlights least. Nothing is cut off at either end, so a
+    brightening does not clip the highlights and a darkening does not crush the shadows to black or sink the
+    white (a plain multiplication, or a plain subtraction, does both).
+    """
 
     id = "brightness"
     name = "Brightness"
@@ -72,10 +83,10 @@ class Brightness(ChainEffect):
         amount = v["amount"]
         if not amount:
             return []
-        if amount > 0:
-            return [_lut("val*%s" % num(1 + amount / 100, 5))]
-        offset = (1 - 1 / (0.99 + amount / 253)) * 0.6
-        return [_lut("val+%s*maxval" % num(offset, 5))]
+        bias = num(2.0 ** (-amount / 100 * _BRIGHTNESS_STOPS), 6)
+        # lutrgb also evaluates a few table entries above the maximum, so x is held at 1; + 0.5 rounds to the nearest level
+        x = "min(%s,1)" % _unit()
+        return [_lut("maxval*%s/(%s+(1-%s)*%s)+0.5" % (x, x, x, bias))]
 
 
 @register

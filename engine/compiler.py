@@ -218,9 +218,14 @@ def compile_export(project: Project) -> Job:
             if layer.has_audio and layer.volume > 0:
                 delay = int(round(layer.start * 1000))
                 tail = ["adelay=%d|%d" % (delay, delay)] if delay else []
+                # audio denoise: afftdn removes steady noise (hiss, fan). The amount sets both the reduction (100 % = 30 dB)
+                # and the assumed noise floor (-60 dB at 0 % up to -25 dB at 100 %: a stronger setting assumes a noisier
+                # recording); the noise is tracked and its residue removed, so the floor is only the start value
+                amount = layer.audio_denoise
+                clean = ["afftdn=nr=%s:nf=%s:nt=w:tn=1:tr=1" % (num(max(amount * 30, 0.01), 2), num(-60 + 35 * amount, 1))] if amount > 0 else []
                 sounds.append(g.chain(["%d:a" % index], [
-                    "asetpts=PTS-STARTPTS", "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo",
-                    "volume=%s" % num(layer.volume)] + tail))
+                    "asetpts=PTS-STARTPTS", "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo"]
+                    + clean + ["volume=%s" % num(layer.volume)] + tail))
         else:
             steps = _steps(layer, ctx)
             if not steps:

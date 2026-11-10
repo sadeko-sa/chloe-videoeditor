@@ -115,3 +115,30 @@ class Grain(ChainEffect):
 
     def filters(self, v, ctx):
         return ["noise=alls=%s:allf=t+u" % num(v["amount"] * 0.6)] if v["amount"] > 0 else []
+
+
+@register
+class Denoise(ChainEffect):
+    """
+    Video denoise with FFmpeg's hqdn3d: a smoothing that works inside each picture (spatial) and across
+    neighbouring pictures (temporal). The temporal part removes flicker noise in flat areas and costs almost
+    nothing in speed; on a single still frame only the spatial part acts. Amount 33 is hqdn3d's own default
+    (luma 4, chroma 3, temporal 6 and 4.5); 100 is three times stronger and makes faces and textures soft.
+    """
+
+    id = "denoise"
+    name = "Denoise"
+    category = "detail"
+    params = (Param("amount", "Amount", "float", 0, 0, 100, 1),)
+
+    def filters(self, v, ctx):
+        """
+        @param v    checked values (amount)
+        @param ctx  picture the filters run on
+        @return     one hqdn3d filter, [] when the amount is 0
+        """
+        if v["amount"] <= 0:
+            return []
+        luma = v["amount"] * 0.12                                    # spatial strength of the brightness
+        chroma = luma * 0.75                                         # color noise is smoothed a little less
+        return ["hqdn3d=%s:%s:%s:%s" % (num(luma, 3), num(chroma, 3), num(luma * 1.5, 3), num(chroma * 1.5, 3))]

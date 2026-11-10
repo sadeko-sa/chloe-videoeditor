@@ -121,6 +121,7 @@ class PropertiesPanel(ttk.LabelFrame):
         if is_media:
             if layer.has_audio:
                 self._number(layer, "volume", "field.volume", 0, 200, 5, 0, scale=100)
+                self._number(layer, "audio_denoise", "field.audio_denoise", 0, 100, 5, 0, scale=100)
             ttk.Label(self, text=t("field.fit")).grid(row=self._row, column=0, sticky="w", pady=2)
             fit = ttk.Combobox(self, state="readonly", width=12, values=[t("fit." + f) for f in FITS])
             fit.current(FITS.index(layer.fit))
