@@ -1,4 +1,6 @@
-"""Detail: blur, sharpen, clarity, grain."""
+"""Detail: blur, sharpen, clarity, grain, denoise."""
+
+import math
 
 from engine.effect import ChainEffect, Effect, GraphBuilder, Param, num, register
 
@@ -117,28 +119,102 @@ class Grain(ChainEffect):
         return ["noise=alls=%s:allf=t+u" % num(v["amount"] * 0.6)] if v["amount"] > 0 else []
 
 
+_DENOISE_METHODS = ("hqdn3d", "fftdnoiz", "nlmeans")
+"""Denoise methods, fast to slow: hqdn3d (fast), fftdnoiz (good), nlmeans (best, about 3 times slower)."""
+
+_DENOISE_STRENGTHS = ("off", "ultralight", "light", "medium", "strong")
+"""Strength presets, like the ones of HandBrake. "off" leaves the picture alone."""
+
+_DENOISE_LADDER = {
+    #               strength:     (spatial, temporal)
+    "hqdn3d":   {"ultralight": (1.0, 1.5), "light": (2.0, 3.0), "medium": (4.0, 6.0), "strong": (8.0, 12.0)},
+    "fftdnoiz": {"ultralight": (1.5, 1.0), "light": (3.0, 2.0), "medium": (5.0, 4.0), "strong": (8.0, 6.0)},
+    "nlmeans":  {"ultralight": (2.0, 1.0), "light": (3.0, 2.0), "medium": (4.0, 4.0), "strong": (6.0, 6.0)},
+}
+"""
+Preset table: method -> strength -> (spatial, temporal). Spatial is the luma strength of hqdn3d, the sigma of
+fftdnoiz or the s of nlmeans. Temporal is the luma strength of the temporal hqdn3d stage. hqdn3d's medium is
+FFmpeg's own default (4:3:6:4.5). The steps were chosen so that every method gets clearly stronger from step to
+step on a noisy test clip, and so that nlmeans (which does almost nothing below s = 2) starts where it begins to act.
+"""
+
+_DENOISE_CHROMA = 0.75
+"""Color noise is smoothed a little less than brightness noise (hqdn3d chroma strength = luma strength * 0.75)."""
+
+
+def _hqdn3d(spatial, temporal):
+    """
+    @param spatial   luma strength inside the picture (0 = none)
+    @param temporal  luma strength across pictures (0 = none)
+    @return          one hqdn3d filter
+    """
+    return "hqdn3d=%s:%s:%s:%s" % (num(spatial, 3), num(spatial * _DENOISE_CHROMA, 3),
+                                   num(temporal, 3), num(temporal * _DENOISE_CHROMA, 3))
+
+
 @register
 class Denoise(ChainEffect):
     """
-    Video denoise with FFmpeg's hqdn3d: a smoothing that works inside each picture (spatial) and across
-    neighbouring pictures (temporal). The temporal part removes flicker noise in flat areas and costs almost
-    nothing in speed; on a single still frame only the spatial part acts. Amount 33 is hqdn3d's own default
-    (luma 4, chroma 3, temporal 6 and 4.5); 100 is three times stronger and makes faces and textures soft.
+    Video denoise with a choice of three FFmpeg filters and four strength presets.
+
+    Method: hqdn3d (fast), fftdnoiz (good, frequency domain) or nlmeans (best, non-local means, about 3 times
+    slower). Strength: Ultralight, Light, Medium or Strong, from the preset table above. Spatial (%) and
+    Temporal (%) then scale the preset's two parts, 100 = the preset as it is, 0 = leave that part out.
+
+    Spatial smoothing works inside each picture, temporal smoothing across neighbouring pictures: it removes
+    flicker and grain in still areas, does nothing on a moving area, and on a single still frame only the spatial
+    part acts. Only hqdn3d has both parts in one filter. fftdnoiz and nlmeans look at one picture at a time,
+    so their temporal part is a temporal-only hqdn3d in front of them (temporal first, then spatial). nlmeans
+    also smooths the color planes, which its own default leaves out.
+
+    Projects from before the presets (one "amount" slider, hqdn3d only) are converted when they are loaded and
+    give the same filter as before.
     """
 
     id = "denoise"
     name = "Denoise"
     category = "detail"
-    params = (Param("amount", "Amount", "float", 0, 0, 100, 1),)
+    params = (Param("method", "Method", "choice", "hqdn3d", choices=_DENOISE_METHODS),
+              Param("strength", "Strength", "choice", "off", choices=_DENOISE_STRENGTHS),
+              Param("spatial", "Spatial (%)", "float", 100, 0, 200, 1),
+              Param("temporal", "Temporal (%)", "float", 100, 0, 200, 1))
+
+    def normalize(self, values):
+        """
+        @param values  stored values of this effect; the old form has only "amount" (0..100)
+        @return        checked values; an old "amount" becomes hqdn3d at the nearest preset with the two
+                       percentages set so that the filter stays exactly the same as the old slider made it
+        """
+        values = dict(values or {})
+        old = values.get("amount")
+        if ("strength" not in values and isinstance(old, (int, float)) and not isinstance(old, bool)
+                and old == old and old > 0):
+            luma = min(old, 100) * 0.12                                  # spatial luma strength of the old slider
+            ladder = _DENOISE_LADDER["hqdn3d"]
+            nearest = min(ladder, key=lambda name: abs(math.log(luma / ladder[name][0])))
+            percent = luma / ladder[nearest][0] * 100
+            for key, value in (("method", "hqdn3d"), ("strength", nearest), ("spatial", percent), ("temporal", percent)):
+                values.setdefault(key, value)
+        return super().normalize(values)
 
     def filters(self, v, ctx):
         """
-        @param v    checked values (amount)
+        @param v    checked values (method, strength, spatial, temporal)
         @param ctx  picture the filters run on
-        @return     one hqdn3d filter, [] when the amount is 0
+        @return     the filters of the chosen method (temporal hqdn3d first, then the spatial filter),
+                    [] when the strength is off or both parts are 0
         """
-        if v["amount"] <= 0:
+        step = _DENOISE_LADDER[v["method"]].get(v["strength"])
+        if not step:
             return []
-        luma = v["amount"] * 0.12                                    # spatial strength of the brightness
-        chroma = luma * 0.75                                         # color noise is smoothed a little less
-        return ["hqdn3d=%s:%s:%s:%s" % (num(luma, 3), num(chroma, 3), num(luma * 1.5, 3), num(chroma * 1.5, 3))]
+        spatial = step[0] * v["spatial"] / 100
+        temporal = step[1] * v["temporal"] / 100
+        if v["method"] == "hqdn3d":
+            return [_hqdn3d(spatial, temporal)] if spatial > 0 or temporal > 0 else []
+        filters = [_hqdn3d(0, temporal)] if temporal > 0 else []
+        if spatial > 0:
+            if v["method"] == "fftdnoiz":
+                filters.append("fftdnoiz=sigma=%s:amount=1" % num(min(spatial, 100), 3))
+            else:                                                        # nlmeans: odd patches, color planes too
+                filters.append("nlmeans=s=%s:p=7:pc=5:r=9:rc=5" % num(max(1.0, min(spatial, 30)), 3))
+        return filters
