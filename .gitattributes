@@ -1,0 +1,3 @@
+# Exclude from export
+tests/ export-ignore
+test/ export-ignore
