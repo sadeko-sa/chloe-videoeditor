@@ -25,6 +25,10 @@ An effect that needs branches (a blurred copy blended back, ...) extends Effect 
 itself into the graph through the GraphBuilder it is given: see Clarity in effect/detail.py.
 Effects are stateless; the values of every use live in the project (engine/project.py).
 
+An effect can name an assist (`assist = "crop"`): a window in ui/ that sets its values with the mouse and is opened
+by a button under the parameters. A pixel parameter gives `extent` ("width" or "height") so its slider runs over the
+project size.
+
 Optional texts in lang/<code>.json (the English name and labels above are the fallback):
     effect.<id>                 name of the effect
     effect.<id>.<param key>     label of a parameter
@@ -51,6 +55,9 @@ curve = tone curve (a list of [input, output] points, see engine/curve.py).
 
 ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 """Allowed effect ids and parameter keys."""
+
+EXTENTS = ("", "width", "height")
+"""Allowed values of Param.extent."""
 
 
 class EffectError(Exception):
@@ -85,6 +92,8 @@ class Param:
     @param choices  allowed values of a "choice" (texts)
     @param group    name of the group the parameter is shown in ("" = always shown); the parameters of a group are
                      shown one group at a time, chosen from a list, and must follow each other in `params`
+    @param extent   "width" or "height" for a size in project pixels ("" = none): the slider then runs from min to the
+                     project width / height instead of to max (max is only the limit of a typed value)
     """
     key: str
     label: str
@@ -95,10 +104,13 @@ class Param:
     step: float = 1.0
     choices: Tuple[str, ...] = ()
     group: str = ""
+    extent: str = ""
 
     def __post_init__(self):
         if not ID_RE.match(self.key):
             raise EffectError("bad parameter key: %r" % self.key)
+        if self.extent not in EXTENTS:
+            raise EffectError("parameter %s: extent must be one of %r" % (self.key, EXTENTS))
         if self.kind not in KINDS:
             raise EffectError("parameter %s: unknown kind %r" % (self.key, self.kind))
         if self.kind == "choice" and (not self.choices or self.default not in self.choices):
@@ -178,6 +190,9 @@ class Effect(ABC):
     name: ClassVar[str]
     category: ClassVar[str] = "color"
     params: ClassVar[Tuple[Param, ...]] = ()
+    assist: ClassVar[str] = ""
+    """Name of the assist window of this effect (see ui/app.py, App.ASSISTS); "" = none. A button under the
+    parameters opens it (text: lang entry "btn.assist.<name>")."""
 
     def defaults(self) -> Dict[str, Any]:
         """@return the neutral values of all parameters"""

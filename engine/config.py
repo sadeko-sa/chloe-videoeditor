@@ -21,7 +21,7 @@ DEFAULTS: Dict[str, Any] = {
     "ffmpeg": "", "preview_max": 1280, "last_dir": "",
     "export": {},
     "cache_dir": "", "recent": [],
-    "workers": 1, "worker_threads": 0, "goto_field": "time",
+    "workers": 1, "worker_threads": 0, "goto_field": "time", "crop_ratio": "free",
 }
 """Config entries and defaults. "ffmpeg" = path of ffmpeg or its folder (empty = search);
 "preview_max" = longest side in pixels of the preview picture;
@@ -29,7 +29,8 @@ DEFAULTS: Dict[str, Any] = {
 "cache_dir" = folder that holds the preview cache (empty = cache/ in the program folder);
 "recent" = project files opened or saved last, newest first (at most RECENT_MAX);
 "workers" = number of job queue workers (jobs rendered at the same time); "worker_threads" = thread limit of each job (0 = auto);
-"goto_field" = field of the Go to time / frame dialog that had the focus when it was closed ("time" or "frame")."""
+"goto_field" = field of the Go to time / frame dialog that had the focus when it was closed ("time" or "frame");
+"crop_ratio" = aspect ratio last chosen in the crop assist ("free", "original" or a shape like "16:9")."""
 
 RECENT_MAX = 10
 """Most entries kept in the recent projects list."""
@@ -77,7 +78,7 @@ def load_config() -> Dict[str, Any]:
     cfg["preview_max"] = _clamp(cfg["preview_max"], *PREVIEW_RANGE, DEFAULTS["preview_max"])
     cfg["workers"] = _clamp(cfg["workers"], *WORKERS_RANGE, DEFAULTS["workers"])
     cfg["worker_threads"] = _clamp(cfg["worker_threads"], *THREADS_RANGE, DEFAULTS["worker_threads"])
-    for key in ("language", "theme", "geometry", "ffmpeg", "last_dir", "cache_dir"):
+    for key in ("language", "theme", "geometry", "ffmpeg", "last_dir", "cache_dir", "crop_ratio"):
         if not isinstance(cfg[key], str):
             cfg[key] = DEFAULTS[key]
     # recent: only non-empty text entries, each file once, newest first; always a list of its own

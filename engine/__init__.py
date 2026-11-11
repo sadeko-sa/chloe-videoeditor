@@ -2,4 +2,4 @@
 
 APP_NAME = "Chloe Videoeditor"
 VERSION = "1.4.0"
-"""Program version; only changed when asked."""
+"""Program version; only increase on release."""

@@ -87,7 +87,7 @@ def _make_folder(root_dir: str = "") -> str:
 
 
 class FrameCache:
-    """PNG files in a temporary folder, oldest removed first."""
+    """PNG files in a temporary folder, oldest removed first. Safe to use from several threads."""
 
     def __init__(self, limit: int = CACHE_ENTRIES, root: str = ""):
         """
@@ -97,6 +97,7 @@ class FrameCache:
         self.limit = limit
         self.folder = _make_folder(root)
         self._items: "OrderedDict[str, str]" = OrderedDict()
+        self._lock = threading.RLock()                              # the preview worker and the crop assist both use it
 
     def path(self, key: str) -> str:
         """@return where the picture for this key is (to be) stored"""
@@ -104,23 +105,25 @@ class FrameCache:
 
     def get(self, key: str) -> Optional[str]:
         """@return the file of a cached picture (marked as recently used), None if not cached"""
-        path = self._items.get(key)
-        if path and os.path.exists(path):
-            self._items.move_to_end(key)
-            return path
-        self._items.pop(key, None)
-        return None
+        with self._lock:
+            path = self._items.get(key)
+            if path and os.path.exists(path):
+                self._items.move_to_end(key)
+                return path
+            self._items.pop(key, None)
+            return None
 
     def add(self, key: str) -> None:
         """Register the file written to path(key); drop the oldest pictures over the limit."""
-        self._items[key] = self.path(key)
-        self._items.move_to_end(key)
-        while len(self._items) > self.limit:
-            _old, path = self._items.popitem(last=False)
-            try:
-                os.remove(path)
-            except OSError:
-                pass
+        with self._lock:
+            self._items[key] = self.path(key)
+            self._items.move_to_end(key)
+            while len(self._items) > self.limit:
+                _old, path = self._items.popitem(last=False)
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
 
     def close(self) -> None:
         shutil.rmtree(self.folder, ignore_errors=True)
@@ -156,6 +159,7 @@ class PreviewEngine:
         engine = PreviewEngine(tools, deliver, cache_dir)   # deliver(seq, png path or None, error or None)
         seq = engine.request(project, t, (w, h), focus_layer_id)
         seq = engine.request(project, t, (w, h), focus_layer_id, view=(x, y, w, h, zoom))   # zoomed: only that part
+        path = engine.render_still(project, t, (w, h), focus_layer_id)   # one picture now, in the calling thread
         engine.set_cache_dir(other_folder)                  # the cache moves, no restart needed
         engine.close()
 
@@ -397,6 +401,30 @@ class PreviewEngine:
         return cache.path(key)
 
     def _render(self, project: Project, t: float, size: Tuple[int, int], focus_id: Optional[str]) -> str:
+        return self._make_frame(project, t, size, focus_id, self._on_start)
+
+    def render_still(self, project: Project, t: float, size: Tuple[int, int], focus_id: Optional[str] = None) -> str:
+        """
+        One picture at once, made in the CALLING thread (for the crop assist, which needs a picture of its own while
+        the preview worker goes on). The cache is used like for the preview, so a picture that is there already (or
+        the picture beneath the focus layer) costs nothing. A newer preview request does not stop this render.
+
+        @param project   the project to draw (not copied: the caller must not change it meanwhile)
+        @param t         timeline second
+        @param size      (width, height) of the picture
+        @param focus_id  id of the layer being edited, see request()
+        @return          the picture file (a cache file: do not delete or change it)
+        @raise FFmpegError, CompileError on failure
+        """
+        return self._make_frame(project, t, size, focus_id, None)
+
+    def _make_frame(self, project: Project, t: float, size: Tuple[int, int], focus_id: Optional[str],
+                    on_start: Optional[Callable[[subprocess.Popen], None]]) -> str:
+        """
+        Whole frame at `size` through the cache (see _render and render_still).
+
+        @param on_start  given to render_frame: called with the FFmpeg process so it can be killed; None = not killable
+        """
         if self.tools is None:
             raise FFmpegError("FFmpeg not found")
         cache = self.cache                                          # kept: set_cache_dir() may swap self.cache
@@ -416,7 +444,7 @@ class PreviewEngine:
                 tap = focus
         job = compile_frame(project, layers, t, size, base=base, tap=tap)
         render_frame(self.tools, job, cache.path(final_key),
-                     cache.path(prefix_key) if prefix_key else None, self._on_start)
+                     cache.path(prefix_key) if prefix_key else None, on_start)
         cache.add(final_key)
         if prefix_key:
             cache.add(prefix_key)

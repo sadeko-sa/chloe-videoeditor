@@ -9,7 +9,7 @@ from engine import effect as fx
 from engine import preset as pr
 from engine.project import FITS, MediaLayer
 from ui.common import (Tip, category_label, choice_label, effect_name, fmt_number, group_label, highlight_fade,
-                       param_label)
+                       param_label, text_or)
 from ui.curve_editor import CurveEditor
 
 ON, OFF = "\u2611", "\u2610"
@@ -219,6 +219,10 @@ class ParamEditor(ttk.Frame):
             row = first_row + max(counts.values())
         if groups:
             self._group_list(eff, list_row, groups)
+        if eff.assist and self.app.has_assist(eff.assist):
+            ttk.Button(self, text=text_or("btn.assist." + eff.assist, t("btn.assist")),
+                       command=lambda: self.app.open_assist(layer.id, index)).grid(
+                row=row, column=0, columnspan=3, sticky="w", pady=(6, 0))
 
     def _group_list(self, eff, row, groups):
         """
@@ -265,7 +269,7 @@ class ParamEditor(ttk.Frame):
     def _param_widgets(self, eff, param, values, send, row, label):
         """The editing widget of one parameter (slider, check box or list) next to its `label`."""
         if param.kind in ("float", "int"):
-            self._slider(row, label, param, values[param.key], send)
+            self._slider(row, label, param, values[param.key], send, self._range(param))
         elif param.kind == "bool":
             var = tk.BooleanVar(value=values[param.key])
             ttk.Checkbutton(self, variable=var,
@@ -278,14 +282,22 @@ class ParamEditor(ttk.Frame):
             box.bind("<<ComboboxSelected>>",
                      lambda e, p=param, b=box: send(p.key, p.choices[max(b.current(), 0)]))
 
-    def _slider(self, row, label, param, value, send):
-        """Slider + typed value. Double click on the label resets the parameter to its default."""
+    def _range(self, param):
+        """@return (lowest, highest) value of a slider; a pixel parameter (Param.extent) runs up to the project size"""
+        if param.extent:
+            size = self.app.project.width if param.extent == "width" else self.app.project.height
+            return param.min, max(param.min, min(param.max, float(size)))
+        return param.min, param.max
+
+    def _slider(self, row, label, param, value, send, bounds):
+        """Slider + typed value (both limited to `bounds`). Double click on the label resets the parameter to its default."""
         as_int = param.kind == "int"
+        low, high = bounds
         digits = 0 if as_int else (2 if param.step < 1 else 1)
         scale_var, text_var = tk.DoubleVar(value=value), tk.StringVar(value=fmt_number(value, digits))
 
         def apply(raw):
-            v = _snap(float(raw), param.step, param.min, param.max, as_int)
+            v = _snap(float(raw), param.step, low, high, as_int)
             text_var.set(fmt_number(v, digits))
             send(param.key, v)
             return v
@@ -298,7 +310,7 @@ class ParamEditor(ttk.Frame):
             scale_var.set(v)
             text_var.set(fmt_number(v, digits))
 
-        ttk.Scale(self, from_=param.min, to=param.max, variable=scale_var, command=apply,
+        ttk.Scale(self, from_=low, to=high, variable=scale_var, command=apply,
                   orient="horizontal").grid(row=row, column=1, sticky="we", padx=6)
         entry = ttk.Entry(self, textvariable=text_var, width=6, justify="right")
         entry.grid(row=row, column=2)
@@ -306,8 +318,8 @@ class ParamEditor(ttk.Frame):
             entry.bind(seq, typed)
 
         def reset(_event=None):
-            target = _snap(param.default, param.step, param.min, param.max, as_int)
-            if _snap(scale_var.get(), param.step, param.min, param.max, as_int) == target:
+            target = _snap(param.default, param.step, low, high, as_int)
+            if _snap(scale_var.get(), param.step, low, high, as_int) == target:
                 return                              # already at the default: nothing changed, no highlight
             scale_var.set(param.default)
             apply(param.default)

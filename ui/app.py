@@ -13,6 +13,7 @@ from lang import list_languages, resolve_language, set_language, t
 from theme import ThemeDialog, apply_theme, list_themes, resolve_color, resolve_theme, set_theme
 
 from engine import APP_NAME, VERSION
+from engine import effect as fx
 from engine import encode as enc
 from engine import ffmpeg as ff
 from engine import preset as pr
@@ -23,6 +24,7 @@ from engine.preview import PreviewEngine, save_frame
 from engine.project import (PROJECT_EXT, AdjustmentLayer, EffectInstance, History, MediaLayer, Project, ProjectError,
                             even, load_project, save_project)
 from ui.common import IS_WIN, Tip, fmt_frame_name, fmt_time
+from ui.crop_assist import CropAssist
 from ui.dialogs import AboutDialog, GotoDialog, ProjectDialog, SettingsDialog
 from ui.export import ExportDialog
 from ui.jobs import JobsWindow
@@ -41,6 +43,9 @@ IS_MAC = sys.platform == "darwin"
 
 class App:
     """The program: one window, one project."""
+
+    ASSISTS = {"crop": CropAssist}
+    """Assist windows by name (Effect.assist): class(app, layer id, effect index); it blocks until it is closed."""
 
     def __init__(self, cfg):
         """@param cfg  config dict (engine.config.load_config())"""
@@ -947,6 +952,41 @@ class App:
         if values.get(key) != value:
             values[key] = value
             self.touch((layer_id, index, key))
+
+    def set_params(self, layer_id, index, values, enable=False):
+        """
+        Change several parameters of one effect in one undo step (used by the assist windows).
+
+        @param layer_id  layer of the effect
+        @param index     index of the effect in layer.effects
+        @param values    {parameter key: new value}
+        @param enable    True = also switch the effect on if it is off
+        """
+        layer = self.project.find(layer_id)
+        if layer is None or not 0 <= index < len(layer.effects):
+            return
+        inst = layer.effects[index]
+        changed = {k: v for k, v in values.items() if inst.values.get(k) != v}
+        switch = enable and not inst.enabled
+        if not changed and not switch:
+            return
+        inst.values.update(changed)
+        inst.enabled = inst.enabled or switch
+        self.effects.refresh(layer, self.sel_effect)
+        self.touch()
+
+    def has_assist(self, name):
+        """@return True if there is an assist window with this name"""
+        return name in self.ASSISTS
+
+    def open_assist(self, layer_id, index):
+        """Open the assist window of the effect at `index` of the layer (blocks until it is closed)."""
+        layer = self.project.find(layer_id)
+        if layer is None or not 0 <= index < len(layer.effects):
+            return
+        eff = fx.get(layer.effects[index].effect_id)
+        if eff is not None and self.has_assist(eff.assist):
+            self.ASSISTS[eff.assist](self, layer_id, index)
 
     # ------------------------------------------------------------------ #
     # Undo, files
