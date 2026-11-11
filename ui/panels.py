@@ -356,10 +356,10 @@ class EffectPanel(ttk.LabelFrame):
         self.tree = ttk.Treeview(box, columns=("on", "name"), show="", selectmode="browse", height=5)
         self.tree.column("on", width=30, stretch=False, anchor="center")
         self.tree.column("name", width=200, stretch=True, anchor="w")
-        scroll = ttk.Scrollbar(box, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=scroll.set)
+        self.scroll = ttk.Scrollbar(box, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=self.scroll.set)
         self.tree.pack(side="left", fill="x", expand=True)
-        scroll.pack(side="right", fill="y")
+        self.scroll.pack(side="right", fill="y")
         self.tree.bind("<<TreeviewSelect>>", self._selected)
         self.tree.bind("<Button-1>", self._click)
         self.tree.bind("<Delete>", lambda e: app.remove_effect())
@@ -410,6 +410,8 @@ class EffectPanel(ttk.LabelFrame):
         if selected is not None and self.tree.exists(str(selected)):
             self.tree.selection_set(str(selected))
             self.tree.see(str(selected))            # scrolls the list to the selected effect
+        self.tree.update_idletasks()                # lay the rows out now, then size the scrollbar to them (a preset adds many rows at once)
+        self.scroll.set(*self.tree.yview())
         self._busy = False
         self.params.show(layer, selected)
 
