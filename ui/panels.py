@@ -445,6 +445,15 @@ class EffectPanel(ttk.LabelFrame):
         self.app.select_effects(EffectSelection.of(picked, active))
 
     def _click(self, event):
+        """
+        Every click on the list gives it the keyboard focus (Tk does that for a plain click only, not for Ctrl+click or
+        Shift+click, so the focus mark stayed on the button or the preview that had it before). A click on the check
+        mark switches the effect on / off.
+
+        @param event  the mouse event
+        @return       "break" if the click was on a check mark, else None
+        """
+        self.tree.focus_set()
         if self.tree.identify_region(event.x, event.y) == "cell" and self.tree.identify_column(event.x) == "#1":
             iid = self.tree.identify_row(event.y)
             if iid:

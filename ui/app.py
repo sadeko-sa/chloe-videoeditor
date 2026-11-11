@@ -909,6 +909,7 @@ class App:
         layer.effects[at:at] = instance
         self.effect_sel = EffectSelection.of(range(at, at + len(instance)), at + len(instance) - 1)   # all of it, top active
         self.effects.refresh(layer, self.effect_sel)
+        self.effects.tree.focus_set()               # the list has the keyboard focus: Delete removes the selected effects
         self.touch()
 
     def save_preset_dialog(self):
