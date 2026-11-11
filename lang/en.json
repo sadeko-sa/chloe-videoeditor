@@ -67,6 +67,7 @@
   "menu.export_frame": "Export frame...",
   "menu.settings": "Settings...",
   "menu.quit": "Quit",
+  "menu.toggle_step": "Undo / Redo last step",
   "menu.undo": "Undo",
   "menu.redo": "Redo",
   "menu.project": "Project settings...",

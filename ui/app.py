@@ -57,6 +57,7 @@ class App:
         apply_theme(self.root)                      # before any widget exists
         self.project, self.project_path = Project(), None
         self.history = History(self.project)
+        self._jump = None                           # (steps, state) after Ctrl+Z jumped to the latest state, see toggle_step
         self.saved_state = self.history.current
         self.sel_layer, self.sel_effect = None, None
         self._missing = set()                       # ids of the media layers whose file does not exist
@@ -189,14 +190,15 @@ class App:
         mod = "Command" if IS_MAC else "Control"
         label = "Cmd" if IS_MAC else "Ctrl"
 
-        def add(menu, key, command, char=None, shift=False):
+        def add(menu, key, command, char=None, shift=False, alt=False):
             """Menu entry with its keyboard shortcut (Ctrl, or Cmd on macOS)."""
-            accel = "%s+%s%s" % (label, "Shift+" if shift else "", char.upper()) if char else ""
+            accel = "%s+%s%s%s" % (label, "Alt+" if alt else "", "Shift+" if shift else "", char.upper()) if char else ""
             menu.add_command(label=t(key), command=command, accelerator=accel)
             if char:
                 for c in ({char.upper()} if shift else {char.lower(), char.upper()}):
                     sym = {",": "comma"}.get(c, c)
-                    root.bind("<%s-%s%s>" % (mod, "Shift-" if shift else "", sym), lambda e, f=command: self._key(f))
+                    root.bind("<%s-%s%s%s>" % (mod, "Alt-" if alt else "", "Shift-" if shift else "", sym),
+                              lambda e, f=command: self._key(f))
 
         file_menu = tk.Menu(bar, tearoff=0)
         add(file_menu, "menu.new", self.new_project, "n")
@@ -215,9 +217,9 @@ class App:
         file_menu.add_separator()
         add(file_menu, "menu.quit", self.quit, "w")
         edit = tk.Menu(bar, tearoff=0)
-        add(edit, "menu.undo", self.undo, "z")
-        add(edit, "menu.redo", self.redo, "y")
-        root.bind("<%s-Shift-Z>" % mod, lambda e: self._key(self.redo))
+        add(edit, "menu.toggle_step", self.toggle_step, "z")        # like Photoshop: Ctrl+Z undoes / redoes the last step
+        add(edit, "menu.undo", self.undo, "z", False, True)
+        add(edit, "menu.redo", self.redo, "z", True)
         edit.add_separator()
         add(edit, "menu.project", lambda: self.project_settings())
         add(edit, "menu.duplicate", self.duplicate_layer, "d")
@@ -230,7 +232,7 @@ class App:
         self.theme_menu = tk.Menu(settings, tearoff=0)              # filled by _fill_themes()
         self.theme_var = tk.StringVar(master=root, value=self.cfg["theme"])
         settings.add_cascade(label=t("menu.theme"), menu=self.theme_menu)
-        add(settings, "menu.settings", lambda: SettingsDialog(self), ",")
+        add(settings, "menu.settings", lambda: SettingsDialog(self), "s", False, True)
         bar.add_cascade(label=t("menu.settings_menu"), menu=settings)
         # root menu "Language": one radio entry per language ("<English name> - <native name>")
         lang_menu = tk.Menu(bar, tearoff=0)
@@ -1002,10 +1004,33 @@ class App:
         self.request_preview()
 
     def undo(self):
+        self._jump = None
         self._restore(self.history.undo())
 
     def redo(self):
+        self._jump = None
         self._restore(self.history.redo())
+
+    def toggle_step(self):
+        """
+        Ctrl+Z like Photoshop (Undo / Redo): it toggles between the state you are at and the latest state. At the
+        latest state it undoes the last step (pressed again it redoes it). After Undo (Ctrl+Alt+Z) went back some steps
+        it jumps to the latest state, and pressed again it goes back to where you were. A new change ends the toggling.
+        """
+        history, state = self.history, None
+        if history.can_redo():                                      # back in the history: jump to the latest state
+            steps = 0
+            while history.can_redo():
+                state, steps = history.redo(), steps + 1
+            self._jump = (steps, history.current)
+        elif self._jump and self._jump[1] is history.current:       # at the latest state after a jump: go back
+            for _ in range(self._jump[0]):
+                state = history.undo()
+            self._jump = None
+        else:
+            self._jump = None
+            state = history.undo()
+        self._restore(state)
 
     def confirm_discard(self):
         """@return True if it is fine to drop the current project (saved, or the user agreed)"""

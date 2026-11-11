@@ -67,6 +67,7 @@
   "menu.export_frame": "フレームを書き出し...",
   "menu.settings": "設定...",
   "menu.quit": "終了",
+  "menu.toggle_step": "最後の操作を取り消す / やり直す",
   "menu.undo": "元に戻す",
   "menu.redo": "やり直す",
   "menu.project": "プロジェクト設定...",
