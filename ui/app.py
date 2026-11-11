@@ -40,6 +40,12 @@ except ImportError:
 MEDIA_TYPES = [("Video / image", "*.mp4 *.mov *.mkv *.avi *.webm *.m4v *.mpg *.mpeg *.wmv *.flv *.gif "
                                  "*.png *.jpg *.jpeg *.bmp *.webp *.tif *.tiff"), ("*", "*.*")]
 IS_MAC = sys.platform == "darwin"
+BUSY_DELAY = 250
+"""Milliseconds a preview may take before the loading bar shows (a quick one never flashes it)."""
+BUSY_STEP = 16
+"""Milliseconds between two moves of the loading bar."""
+BUSY_HEIGHT = 3
+"""Height of the loading bar in pixels."""
 
 
 class App:
@@ -69,8 +75,9 @@ class App:
         self._fit, self._shown, self._interim_img = None, None, None   # (image, x0, y0, scale) of the last fit / last shown picture
         self.inbox = queue.Queue()                  # functions from worker threads, run in the Tk thread
         self.tools = ff.locate(cfg["ffmpeg"])
-        self.engine = PreviewEngine(self.tools, lambda seq, path, err: self.inbox.put(
-            lambda: self._on_result(seq, path, err)), cfg["cache_dir"])
+        self._busy_id, self._busy_on, self._busy_x = None, False, 0.0   # loading bar: timer (None = none), is shown, left edge
+        self.engine = PreviewEngine(self.tools, lambda seq, path, err, final: self.inbox.put(
+            lambda: self._on_result(seq, path, err, final)), cfg["cache_dir"])
         self.jobs = JobQueue(cfg["workers"], cfg["worker_threads"],
                              lambda job: self.inbox.put(lambda: self._job_changed(job)))
         self.jobs_win = None
@@ -645,14 +652,60 @@ class App:
             size, view = self._view_request()
         self._view_req = view
         self.engine.fit_size = self.preview_size()      # the picture the engine makes the quick preview of a zoom from
+        self._busy_start()
         self._seq = self.engine.request(self.project, self.t, size, self.sel_layer, self.compare, view)
 
     def _say(self, text, error=False):
         self.status.configure(text=text, foreground=self.col_err if error else self.col_info)
 
-    def _on_result(self, seq, path, error):
+    def _busy_start(self):
+        """Start the loading bar: it shows after BUSY_DELAY ms if the picture is still not there. Does nothing while on."""
+        if self._busy_id is None and not self._busy_on:
+            self._busy_id = self.root.after(BUSY_DELAY, self._busy_show)
+
+    def _busy_show(self):
+        """Show the loading bar: a flat bar along the top edge of the preview that runs from left to right again and again."""
+        self._busy_on = True
+        self._busy_x = -self._busy_width()
+        self._busy_tick()
+
+    def _busy_width(self):
+        """@return width of the moving part of the loading bar in pixels: a third of the preview, at least 60"""
+        return max(60.0, self.canvas.winfo_width() / 3.0)
+
+    def _busy_tick(self):
+        """Move the loading bar one step (about one pass per second) and plan the next step."""
+        width, bar = self.canvas.winfo_width(), self._busy_width()
+        self._busy_x += width / 60.0
+        if self._busy_x > width:
+            self._busy_x = -bar
+        self.canvas.delete("busy")
+        self.canvas.create_rectangle(self._busy_x, 0, self._busy_x + bar, BUSY_HEIGHT, fill=self.col_info, outline="",
+                                     tags="busy")
+        self.canvas.tag_raise("busy")
+        self._busy_id = self.root.after(BUSY_STEP, self._busy_tick)
+
+    def _busy_stop(self):
+        """Take the loading bar off the preview, or cancel it if it is not shown yet."""
+        if self._busy_id is not None:
+            self.root.after_cancel(self._busy_id)
+            self._busy_id = None
+        self._busy_on = False
+        self.canvas.delete("busy")
+
+    def _on_result(self, seq, path, error, final=True):
+        """
+        A picture of the preview engine arrived (Tk thread).
+
+        @param seq    number of the request it answers; an older one than the last request is ignored
+        @param path   picture file, None on an error
+        @param error  error text, None if there is none
+        @param final  False for the quick picture of a zoomed request: the sharp one follows, the loading bar goes on
+        """
         if seq != self._seq:
             return                                  # a newer picture was asked for
+        if final:
+            self._busy_stop()
         if error:
             self._say(error.splitlines()[-1] if error.strip() else error, True)
             return

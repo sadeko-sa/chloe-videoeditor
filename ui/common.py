@@ -1,15 +1,97 @@
 """ui/common.py - Small helpers shared by the windows: text lookups, tooltip, modal dialog base, Windows setup."""
 
+import base64
+import math
 import os
+import struct
 import subprocess
 import sys
 import tkinter as tk
+import zlib
 from tkinter import ttk
 
 from lang import t
 from theme import resolve_color
 
 from engine.ffmpeg import IS_WIN
+
+
+def _png(width, height, rgba):
+    """
+    @param width   picture width in pixels
+    @param height  picture height in pixels
+    @param rgba    bytes, 4 per pixel (R, G, B, alpha), row by row
+    @return        the picture as PNG file content
+    """
+    def chunk(kind, data):
+        body = kind + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+
+    rows = b"".join(b"\x00" + rgba[y * width * 4:(y + 1) * width * 4] for y in range(height))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+
+
+def ring_frames(root, fg, bg, size=44, steps=12):
+    """
+    Smooth (anti-aliased, transparent) frames of a loading ring: a dark soft disc, a faint ring and a bright arc with
+    round ends that turns from frame to frame. Tk draws no smooth circles on a canvas, so the pictures are made here
+    (9 samples per pixel) and the canvas only shows them one after the other.
+
+    @param root   a Tk widget (to turn the color names into numbers)
+    @param fg     color of the ring and the arc
+    @param bg     color of the disc behind the ring
+    @param size   width and height of a frame in pixels
+    @param steps  number of frames for one turn
+    @return       list of tk.PhotoImage, the arc turns clockwise from one to the next
+    """
+    fg = tuple(c // 257 for c in root.winfo_rgb(fg))
+    bg = tuple(c // 257 for c in root.winfo_rgb(bg))
+    mid, radius, width = size / 2.0, size / 2.0 - 5.0, 3.6
+    extent, sub = 100.0, 3
+    frames = []
+    for step in range(steps):
+        start = -step * 360.0 / steps                           # degrees, counter clockwise from the right (like Tk)
+        ends = [(mid + radius * math.cos(math.radians(a)), mid - radius * math.sin(math.radians(a)))
+                for a in (start, start + extent)]
+        data = bytearray()
+        for py in range(size):
+            for px in range(size):
+                acc = [0.0, 0.0, 0.0, 0.0]                      # premultiplied R, G, B and alpha
+                for sy in range(sub):
+                    for sx in range(sub):
+                        x, y = px + (sx + 0.5) / sub, py + (sy + 0.5) / sub
+                        dx, dy = x - mid, mid - y
+                        dist = math.hypot(dx, dy)
+                        layers = []
+                        if dist <= mid - 1.0:
+                            layers.append((bg, 0.62))
+                        if abs(dist - radius) <= width / 2.0:
+                            layers.append((fg, 0.28))
+                            angle = (math.degrees(math.atan2(dy, dx)) - start) % 360.0
+                            if angle <= extent:
+                                layers.append((fg, 1.0))
+                        if any(math.hypot(x - ex, y - ey) <= width / 2.0 for ex, ey in ends):
+                            layers.append((fg, 1.0))             # the round ends of the arc
+                        r = g = b = a = 0.0
+                        for color, alpha in layers:             # each layer over the ones below it
+                            r, g, b = (r * (1 - alpha) + color[0] * alpha, g * (1 - alpha) + color[1] * alpha,
+                                       b * (1 - alpha) + color[2] * alpha)
+                            a = a + alpha * (1 - a)
+                        acc[0] += r * a
+                        acc[1] += g * a
+                        acc[2] += b * a
+                        acc[3] += a
+                total = sub * sub
+                alpha = acc[3] / total
+                if acc[3] > 0:
+                    data += bytes((int(round(acc[0] / acc[3])), int(round(acc[1] / acc[3])),
+                                   int(round(acc[2] / acc[3])), int(round(alpha * 255))))
+                else:
+                    data += b"\x00\x00\x00\x00"
+        frames.append(tk.PhotoImage(master=root, format="png",
+                                    data=base64.b64encode(_png(size, size, bytes(data))).decode("ascii")))
+    return frames
 
 
 def detach_console(script):

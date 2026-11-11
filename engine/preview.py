@@ -156,21 +156,23 @@ class PreviewEngine:
     """
     Worker for preview requests.
 
-        engine = PreviewEngine(tools, deliver, cache_dir)   # deliver(seq, png path or None, error or None)
+        engine = PreviewEngine(tools, deliver, cache_dir)   # deliver(seq, png path or None, error or None, final)
         seq = engine.request(project, t, (w, h), focus_layer_id)
         seq = engine.request(project, t, (w, h), focus_layer_id, view=(x, y, w, h, zoom))   # zoomed: only that part
         path = engine.render_still(project, t, (w, h), focus_layer_id)   # one picture now, in the calling thread
         engine.set_cache_dir(other_folder)                  # the cache moves, no restart needed
         engine.close()
 
-    `deliver` runs in the worker thread, and is skipped for a request that a newer one replaced.
+    `deliver` runs in the worker thread, and is skipped for a request that a newer one replaced. A zoomed request first
+    delivers a quick soft picture with final = False, then the sharp one with final = True.
     """
 
-    def __init__(self, tools: Optional[Tools], deliver: Callable[[int, Optional[str], Optional[str]], None],
+    def __init__(self, tools: Optional[Tools], deliver: Callable[[int, Optional[str], Optional[str], bool], None],
                  cache_dir: str = ""):
         """
         @param tools      the FFmpeg programs, None if not found
-        @param deliver    called in the worker thread with the answer of a request
+        @param deliver    called in the worker thread with the answer of a request: (seq, png path or None, error or
+                          None, final); final is False for the quick picture of a zoomed request, True for the last one
         @param cache_dir  folder picked by the user to hold the cache; empty = cache/ in the program folder
         """
         self.tools, self.deliver = tools, deliver
@@ -260,7 +262,7 @@ class PreviewEngine:
                         with self._cond:
                             current = seq == self._seq and not self._closed
                         if current:
-                            self.deliver(seq, early, None)
+                            self.deliver(seq, early, None, False)
                     path = self._render_view(project, t, size, focus_id, view)
                 else:
                     self._fit_size = size
@@ -270,7 +272,7 @@ class PreviewEngine:
             with self._cond:
                 current = seq == self._seq and not self._closed
             if current:
-                self.deliver(seq, path, error)
+                self.deliver(seq, path, error, True)
 
     @staticmethod
     def _view_frame(project: Project, size: Tuple[int, int], zoom: float) -> Tuple[int, int]:

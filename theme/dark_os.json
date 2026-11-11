@@ -16,7 +16,7 @@
   },
   "viewer": {
     "canvas_bg": "#101010",
-    "info_text": "#e6e6e6",
+    "info_text": "#b4b4b4",
     "error_text": "#ff7b72"
   },
   "tab": {
