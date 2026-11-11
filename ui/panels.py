@@ -8,6 +8,7 @@ from lang import t
 from engine import effect as fx
 from engine import preset as pr
 from engine.project import FITS, MediaLayer
+from engine.selection import EffectSelection
 from ui.common import (Tip, category_label, choice_label, effect_name, fmt_number, group_label, highlight_fade,
                        param_label, text_or)
 from ui.curve_editor import CurveEditor
@@ -181,11 +182,21 @@ class ParamEditor(ttk.Frame):
         self.app = app
         self.columnconfigure(1, weight=1)
 
-    def show(self, layer, index):
-        """Rebuild for layer.effects[index] (None = empty)."""
+    def show(self, layer, selection):
+        """
+        Rebuild for the selected effects of the layer (nothing selected = empty). One effect: its parameters. Several
+        effects: nothing (the parameters belong to one effect).
+
+        @param layer      layer the effects belong to (None = empty)
+        @param selection  EffectSelection of the effects of that layer
+        """
         for child in self.winfo_children():
             child.destroy()
+        index = selection.active
         if layer is None or index is None or not 0 <= index < len(layer.effects):
+            return
+        chosen = [i for i in selection.ordered() if i < len(layer.effects)]
+        if len(chosen) > 1:
             return
         inst = layer.effects[index]
         eff = fx.get(inst.effect_id)
@@ -353,7 +364,7 @@ class EffectPanel(ttk.LabelFrame):
         box.pack(fill="x", pady=6)
         # show="" = no header row and no tree column: the group is already called "Effects", so a header
         # "Effect" above the rows would only say it twice.
-        self.tree = ttk.Treeview(box, columns=("on", "name"), show="", selectmode="browse", height=5)
+        self.tree = ttk.Treeview(box, columns=("on", "name"), show="", selectmode="extended", height=5)
         self.tree.column("on", width=30, stretch=False, anchor="center")
         self.tree.column("name", width=200, stretch=True, anchor="w")
         self.scroll = ttk.Scrollbar(box, orient="vertical", command=self.tree.yview)
@@ -397,8 +408,13 @@ class EffectPanel(ttk.LabelFrame):
         finally:
             menu.grab_release()
 
-    def refresh(self, layer, selected):
-        """Show the effects of the layer (None = none) and select the one at index `selected`."""
+    def refresh(self, layer, selection):
+        """
+        Show the effects of the layer (None = none) and select some of them.
+
+        @param layer      the layer (None = no effects)
+        @param selection  EffectSelection; its active effect gets the keyboard focus and the parameter panel
+        """
         self._busy = True
         self.tree.delete(*self.tree.get_children())
         effects = layer.effects if layer else []
@@ -407,20 +423,26 @@ class EffectPanel(ttk.LabelFrame):
             eff = fx.get(inst.effect_id)
             self.tree.insert("", "end", iid=str(i),     # iid = index in layer.effects (the order of application)
                              values=(ON if inst.enabled else OFF, effect_name(eff) if eff else "? " + inst.effect_id))
-        if selected is not None and self.tree.exists(str(selected)):
-            self.tree.selection_set(str(selected))
-            self.tree.see(str(selected))            # scrolls the list to the selected effect
+        rows = [str(i) for i in selection.ordered() if self.tree.exists(str(i))]
+        if rows:
+            self.tree.selection_set(rows)
+            self.tree.focus(str(selection.active))  # the anchor of the next Shift+click
+            self.tree.see(str(selection.active))    # scrolls the list to the active effect
         self.tree.update_idletasks()                # lay the rows out now, then size the scrollbar to them (a preset adds many rows at once)
         self.scroll.set(*self.tree.yview())
         self._busy = False
-        self.params.show(layer, selected)
+        self.params.show(layer, selection)
 
     def _selected(self, _event):
         """Tk sends <<TreeviewSelect>> after refresh() returned, so only a real change of selection counts."""
-        sel = self.tree.selection()
-        wanted = int(sel[0]) if sel else None
-        if wanted is not None and wanted != self.app.sel_effect:
-            self.app.select_effect(wanted)
+        picked = {int(iid) for iid in self.tree.selection()}
+        current = self.app.effect_sel
+        if picked == current.indices:
+            return
+        focus = self.tree.focus()
+        # The active effect is the one last clicked (the focus row). If that click deselected it, the old one stays.
+        active = next((i for i in (int(focus) if focus else None, current.active) if i in picked), None)
+        self.app.select_effects(EffectSelection.of(picked, active))
 
     def _click(self, event):
         if self.tree.identify_region(event.x, event.y) == "cell" and self.tree.identify_column(event.x) == "#1":

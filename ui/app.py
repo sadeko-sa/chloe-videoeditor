@@ -23,6 +23,7 @@ from engine.jobs import JobQueue, JobState
 from engine.preview import PreviewEngine, save_frame
 from engine.project import (PROJECT_EXT, AdjustmentLayer, EffectInstance, History, MediaLayer, Project, ProjectError,
                             even, load_project, save_project)
+from engine.selection import EffectSelection, move_block
 from ui.common import IS_WIN, Tip, fmt_frame_name, fmt_time
 from ui.crop_assist import CropAssist
 from ui.dialogs import AboutDialog, GotoDialog, ProjectDialog, SettingsDialog
@@ -59,7 +60,7 @@ class App:
         self.history = History(self.project)
         self._jump = None                           # (steps, state) after Ctrl+Z jumped to the latest state, see toggle_step
         self.saved_state = self.history.current
-        self.sel_layer, self.sel_effect = None, None
+        self.sel_layer, self.effect_sel = None, EffectSelection.none()   # selected layer; selected effects of it
         self._missing = set()                       # ids of the media layers whose file does not exist
         self.t, self._seq, self._job, self._img = 0.0, 0, None, None
         self._time_lock, self.compare = False, False
@@ -248,8 +249,8 @@ class App:
         root.config(menu=bar)
         self._fill_recent()
         self._fill_themes()
-        # preview zoom, like Photoshop: Ctrl+0 fit, Ctrl+1 100%, Ctrl + / - step
-        for sym, command in (("0", self.zoom_fit), ("1", lambda: self.zoom_to(1.0)),
+        # preview zoom, like Photoshop: Ctrl+0 fit, Ctrl + / - step (no Ctrl+1: Tk reads "<Control-1>" as Ctrl+left click)
+        for sym, command in (("0", self.zoom_fit),
                              ("plus", lambda: self.zoom_step(1)), ("equal", lambda: self.zoom_step(1)),
                              ("KP_Add", lambda: self.zoom_step(1)), ("minus", lambda: self.zoom_step(-1)),
                              ("KP_Subtract", lambda: self.zoom_step(-1))):
@@ -417,7 +418,7 @@ class App:
     # ------------------------------------------------------------------ #
     # Preview zoom and pan
     #   left drag = move, Ctrl + left drag (left / right) = zoom, wheel = zoom, double click = fit / 100%,
-    #   Ctrl+0 fit, Ctrl+1 100%, Ctrl +/- step, right click = menu.
+    #   Ctrl+0 fit, Ctrl +/- step, right click = menu.
     # ------------------------------------------------------------------ #
 
     ZOOM_STEPS = (0.0625, 0.125, 0.25, 1 / 3.0, 0.5, 2 / 3.0, 1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0)
@@ -601,8 +602,7 @@ class App:
         menu = tk.Menu(self.root, tearoff=0)
         menu.add_command(label=t("view.fit"), accelerator=label + "+0", command=self.zoom_fit)
         for percent in (50, 100, 200, 400, 800):
-            menu.add_command(label="%d%%" % percent, accelerator=label + "+1" if percent == 100 else "",
-                             command=lambda z=percent / 100.0: self.zoom_to(z))
+            menu.add_command(label="%d%%" % percent, command=lambda z=percent / 100.0: self.zoom_to(z))
         menu.add_separator()
         menu.add_command(label=t("view.zoom_in"), accelerator=label + "++", command=lambda: self.zoom_step(1))
         menu.add_command(label=t("view.zoom_out"), accelerator=label + "+-", command=lambda: self.zoom_step(-1))
@@ -706,14 +706,13 @@ class App:
     def refresh_inspector(self):
         layer = self.selected()
         self.props.show(layer)
-        self.effects.refresh(layer, self.sel_effect)
+        self.effects.refresh(layer, self.effect_sel)
 
     def refresh_all(self):
         if self.selected() is None:
             self.sel_layer = self.project.layers[-1].id if self.project.layers else None
         layer = self.selected()
-        if layer is None or not 0 <= (self.sel_effect if self.sel_effect is not None else -1) < len(layer.effects):
-            self.sel_effect = len(layer.effects) - 1 if layer and layer.effects else None     # the top row
+        self.effect_sel = self.effect_sel.clamped(len(layer.effects) if layer else 0)      # nothing left: the top row
         self.refresh_layers()
         self.refresh_inspector()
 
@@ -731,7 +730,7 @@ class App:
     def select_layer(self, layer_id):
         self.sel_layer = layer_id
         layer = self.selected()
-        self.sel_effect = len(layer.effects) - 1 if layer and layer.effects else None         # the top row
+        self.effect_sel = EffectSelection.top(len(layer.effects) if layer else 0)             # the top row
         self.refresh_inspector()
         self.request_preview()
 
@@ -760,7 +759,7 @@ class App:
             self.root.configure(cursor="")
         if added:
             self.cfg["last_dir"] = os.path.dirname(paths[-1])
-            self.sel_layer, self.sel_effect = added.id, None
+            self.sel_layer, self.effect_sel = added.id, EffectSelection.none()
             self.refresh_all()
             self.touch()
 
@@ -768,7 +767,7 @@ class App:
         count = sum(isinstance(l, AdjustmentLayer) for l in self.project.layers) + 1
         layer = AdjustmentLayer("%s %d" % (t("kind.adjustment"), count))
         self.project.layers.append(layer)
-        self.sel_layer, self.sel_effect = layer.id, None
+        self.sel_layer, self.effect_sel = layer.id, EffectSelection.none()
         self.refresh_all()
         self.touch()
 
@@ -780,7 +779,7 @@ class App:
         self.project.layers.remove(layer)
         rest = self.project.layers
         self.sel_layer = rest[min(index, len(rest) - 1)].id if rest else None
-        self.sel_effect = None
+        self.effect_sel = EffectSelection.none()
         self.refresh_all()
         self.touch()
 
@@ -874,31 +873,42 @@ class App:
     # Effects
     # ------------------------------------------------------------------ #
 
-    def select_effect(self, index):
-        self.sel_effect = index
-        self.effects.refresh(self.selected(), index)
+    def select_effects(self, selection):
+        """
+        Select effects of the selected layer (the effect list calls this after a click). The list is not rebuilt, only the
+        parameter panel.
+
+        @param selection  EffectSelection; indices that do not exist are dropped, nothing left = nothing selected
+        """
+        layer = self.selected()
+        self.effect_sel = selection.clamped(len(layer.effects) if layer else 0, keep_empty=True)
+        self.effects.params.show(layer, self.effect_sel)    # the list already shows the click; only the parameters change
+
+    def _insert_position(self, layer):
+        """@return index for a new effect: above the selected ones (applied right after them), else on top"""
+        return max(self.effect_sel.indices) + 1 if self.effect_sel else len(layer.effects)
 
     def add_effect(self, effect_id):
         layer = self.selected()
         if layer is None:
             return
-        # Above the selected effect = applied right after it (like a new layer in Photoshop); nothing selected = on top.
-        at = len(layer.effects) if self.sel_effect is None else self.sel_effect + 1
+        # Above the selected effects = applied right after them (like a new layer in Photoshop); nothing selected = on top.
+        at = self._insert_position(layer)
         layer.effects.insert(at, EffectInstance.create(effect_id))
-        self.sel_effect = at
-        self.effects.refresh(layer, self.sel_effect)
+        self.effect_sel = EffectSelection.single(at)
+        self.effects.refresh(layer, self.effect_sel)
         self.touch()
 
     def apply_preset(self, preset):
-        """Put the effect chain of a preset into the selected layer, in the place a new effect would go."""
+        """Put the effect chain of a preset into the selected layer, in the place a new effect would go, and select it."""
         layer = self.selected()
         instance = preset.instance()
         if layer is None or not instance:
             return
-        at = len(layer.effects) if self.sel_effect is None else self.sel_effect + 1
+        at = self._insert_position(layer)
         layer.effects[at:at] = instance
-        self.sel_effect = at + len(instance) - 1
-        self.effects.refresh(layer, self.sel_effect)
+        self.effect_sel = EffectSelection.of(range(at, at + len(instance)), at + len(instance) - 1)   # all of it, top active
+        self.effects.refresh(layer, self.effect_sel)
         self.touch()
 
     def save_preset_dialog(self):
@@ -922,29 +932,40 @@ class App:
             self.apply_preset(chosen)
 
     def remove_effect(self):
-        layer, i = self.selected(), self.sel_effect
-        if layer is None or i is None:
+        """Remove all selected effects (one undo step)."""
+        layer, removed = self.selected(), self.effect_sel.ordered()
+        if layer is None or not removed:
             return
-        del layer.effects[i]
-        self.sel_effect = min(i, len(layer.effects) - 1) if layer.effects else None
-        self.effects.refresh(layer, self.sel_effect)
+        for i in reversed(removed):                 # from the back, so the lower indices stay valid
+            del layer.effects[i]
+        left = len(layer.effects)
+        self.effect_sel = EffectSelection.single(min(removed[0], left - 1) if left else None)
+        self.effects.refresh(layer, self.effect_sel)
         self.touch()
 
     def move_effect(self, delta):
-        layer, i = self.selected(), self.sel_effect
-        if layer is None or i is None or not 0 <= i + delta < len(layer.effects):
+        """Move all selected effects one place, keeping their order (one undo step); +1 = applied later."""
+        layer = self.selected()
+        moved = move_block(len(layer.effects), self.effect_sel.indices, delta) if layer else None
+        if moved is None:
             return
-        layer.effects[i], layer.effects[i + delta] = layer.effects[i + delta], layer.effects[i]
-        self.sel_effect = i + delta
-        self.effects.refresh(layer, self.sel_effect)
+        order, indices = moved
+        layer.effects[:] = [layer.effects[old] for old in order]
+        self.effect_sel = EffectSelection.of(indices, order.index(self.effect_sel.active))
+        self.effects.refresh(layer, self.effect_sel)
         self.touch()
 
     def toggle_effect(self, index):
+        """Switch an effect on / off; if it is one of several selected effects, all of them get the new state."""
         layer = self.selected()
-        if layer and 0 <= index < len(layer.effects):
-            layer.effects[index].enabled = not layer.effects[index].enabled
-            self.effects.refresh(layer, self.sel_effect)
-            self.touch()
+        if layer is None or not 0 <= index < len(layer.effects):
+            return
+        targets = self.effect_sel.ordered() if index in self.effect_sel else [index]
+        state = not layer.effects[index].enabled
+        for i in targets:
+            layer.effects[i].enabled = state
+        self.effects.refresh(layer, self.effect_sel)
+        self.touch()
 
     def set_param(self, layer_id, index, key, value):
         layer = self.project.find(layer_id)
@@ -974,7 +995,7 @@ class App:
             return
         inst.values.update(changed)
         inst.enabled = inst.enabled or switch
-        self.effects.refresh(layer, self.sel_effect)
+        self.effects.refresh(layer, self.effect_sel)
         self.touch()
 
     def has_assist(self, name):
@@ -1045,7 +1066,7 @@ class App:
         self.project, self.project_path = project, path
         self.history.reset(project)
         self.saved_state = self.history.current
-        self.sel_layer = self.sel_effect = None
+        self.sel_layer, self.effect_sel = None, EffectSelection.none()
         self.t = 0.0
         self.zoom = None
         self._apply_cursor()
