@@ -205,7 +205,9 @@ def parse_time(text):
 
 def fmt_number(value, digits=2):
     """@return a number without useless trailing zeros"""
-    text = ("%.*f" % (digits, value)).rstrip("0").rstrip(".")
+    text = "%.*f" % (digits, value)
+    if "." in text:                                 # trim zeros only after a decimal point ("100" must stay "100")
+        text = text.rstrip("0").rstrip(".")
     return text if text not in ("", "-0") else "0"
 
 
