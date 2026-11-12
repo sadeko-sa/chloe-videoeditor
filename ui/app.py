@@ -1120,14 +1120,29 @@ class App:
         self.project, self.project_path = project, path
         self.history.reset(project)
         self.saved_state = self.history.current
-        self.sel_layer, self.effect_sel = None, EffectSelection.none()
+        self.sel_layer, self.effect_sel = self._saved_selection(project)
         self.t = 0.0
         self.zoom = None
         self._apply_cursor()
-        self.refresh_all()
+        self.refresh_layers()                       # not refresh_all: it would select the top effect of an empty selection
+        self.refresh_inspector()
         self.update_title()
         self.update_time_range()
         self.set_time(0.0)
+
+    @staticmethod
+    def _saved_selection(project):
+        """
+        @param project  a project that was just loaded
+        @return         (layer id, EffectSelection) the project file had; for a file without a (valid) selection the top
+                        layer and its top effect, as a new layer would have
+        """
+        layer = project.find(project.sel_layer)
+        if layer is None:
+            layer = project.layers[-1] if project.layers else None
+            return (layer.id if layer else None), EffectSelection.top(len(layer.effects) if layer else 0)
+        # keep_empty: an empty selection was saved on purpose (everything deselected), it stays empty
+        return layer.id, EffectSelection.of(project.sel_effects, project.sel_active).clamped(len(layer.effects), keep_empty=True)
 
     def new_project(self):
         if self.confirm_discard():
@@ -1236,8 +1251,12 @@ class App:
         return self._write(path) if path else False
 
     def _write(self, path):
+        project = self.project
+        # the selection goes into the file only; it is no change of the project (no undo step, no unsaved mark)
+        project.sel_layer, project.sel_effects, project.sel_active = (self.sel_layer, self.effect_sel.ordered(),
+                                                                       self.effect_sel.active)
         try:
-            save_project(self.project, path)
+            save_project(project, path)
         except OSError as exc:
             messagebox.showerror(t("dlg.error"), t("msg.save_failed", error=exc), parent=self.root)
             return False

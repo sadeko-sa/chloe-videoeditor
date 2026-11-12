@@ -204,11 +204,24 @@ class AdjustmentLayer(Layer):
 
 @dataclass
 class Project:
-    """The whole edit: frame size, frame rate and the layers (bottom to top)."""
+    """
+    The whole edit: frame size, frame rate and the layers (bottom to top).
+
+    @param sel_layer    id of the layer the window had selected when the project was saved, None = none saved
+    @param sel_effects  indices of the selected effects of that layer (Layer.effects)
+    @param sel_active   the active one of the selected effects, None = none saved
+
+    The selection is not part of the edit: to_dict() (the undo steps) leaves it out, so selecting something is
+    no change and no undo step. Only to_file_dict() (the project file) holds it; the window fills these fields
+    before saving and reads them after loading.
+    """
     width: int = 1280
     height: int = 720
     fps: float = 30.0
     layers: List[Layer] = field(default_factory=list)
+    sel_layer: Optional[str] = field(default=None, compare=False)
+    sel_effects: List[int] = field(default_factory=list, compare=False)
+    sel_active: Optional[int] = field(default=None, compare=False)
 
     def duration(self) -> float:
         """@return the end of the last media layer in seconds (0 if there is no media)"""
@@ -246,6 +259,28 @@ class Project:
         return {"format": FORMAT, "version": FORMAT_VERSION, "width": self.width, "height": self.height,
                 "fps": self.fps, "layers": [l.to_dict() for l in self.layers]}
 
+    def to_file_dict(self) -> Dict[str, Any]:
+        """@return to_dict() plus the selection (layer and effects); this is what a project file holds"""
+        data = self.to_dict()
+        data["selection"] = {"layer": self.sel_layer, "effects": sorted(self.sel_effects), "active": self.sel_active}
+        return data
+
+    def _load_selection(self, data: Any) -> None:
+        """
+        Take the selection of a project file. Anything wrong, or a layer that is not in the project, is ignored
+        (the window then selects the top layer, like for a file without a selection).
+        """
+        if not isinstance(data, dict):
+            return
+        layer = data.get("layer")
+        if not isinstance(layer, str) or self.find(layer) is None:
+            return
+        self.sel_layer = layer
+        whole = lambda v: isinstance(v, int) and not isinstance(v, bool) and v >= 0       # an index, not True / -1 / "x"
+        effects = data.get("effects")
+        self.sel_effects = [i for i in effects if whole(i)] if isinstance(effects, list) else []
+        self.sel_active = data.get("active") if whole(data.get("active")) else None
+
     @classmethod
     def from_dict(cls, data: Any) -> "Project":
         """@raise ProjectError if data is not a project"""
@@ -261,14 +296,15 @@ class Project:
                 project.layers.append(MediaLayer.from_dict(item))
             elif item.get("kind") == "adjustment":
                 project.layers.append(AdjustmentLayer.from_dict(item))
+        project._load_selection(data.get("selection"))
         return project
 
 
 def save_project(project: Project, path: str) -> None:
-    """Write a project as JSON (temporary file first). @raise OSError on failure"""
+    """Write a project as JSON, with its selection (temporary file first). @raise OSError on failure"""
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(project.to_dict(), f, indent=2, ensure_ascii=False)
+        json.dump(project.to_file_dict(), f, indent=2, ensure_ascii=False)
         f.write("\n")
     os.replace(tmp, path)
 
