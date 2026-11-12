@@ -212,6 +212,7 @@
   "btn.compare": "Original (hold)",
   "tip.compare": "Hold to see the picture without effects",
   "status.original": "Original (no effects)",
+  "toast.effects_copied": "Copied {count} effect(s)",
   "effect.black_level": "Black level",
   "effect.white_level": "White level",
   "effect.black_level.amount": "Amount",

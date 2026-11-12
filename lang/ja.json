@@ -212,6 +212,7 @@
   "btn.compare": "元の映像 (長押し)",
   "tip.compare": "押している間、エフェクトなしの映像を表示",
   "status.original": "元の映像 (エフェクトなし)",
+  "toast.effects_copied": "{count} 個のエフェクトをコピーしました",
   "effect.black_level": "黒レベル",
   "effect.white_level": "白レベル",
   "effect.black_level.amount": "量",

@@ -20,6 +20,10 @@ MOD = "Command" if IS_MAC else "Control"
 """Tk name of the key for shortcuts: Cmd on macOS, else Ctrl."""
 MOD_LABEL = "Cmd" if IS_MAC else "Ctrl"
 """The same key as shown in menus."""
+POINTER_GAP_X, POINTER_GAP_Y = 12, 8
+"""Pixels between the mouse pointer and a message next to it (right of it, above it)."""
+POINTER_CURSOR_HEIGHT = 24
+"""Pixels a message must stay below the pointer's position so that it does not cover the mouse cursor."""
 
 
 def _png(width, height, rgba):
@@ -301,6 +305,46 @@ def highlight_fade(label, entry, hold=100, fade=350, step=30):
     paint(-1)
 
 
+def popup(parent, text, where, wrap=0):
+    """
+    Show a small borderless window with a text.
+
+    @param parent  widget the window belongs to
+    @param text    text of the window
+    @param where   function(width, height) -> (x, y): screen position of the window's top left corner; the window is
+                   moved back onto the screen if that puts it partly outside
+    @param wrap    width in pixels at which the text is wrapped; 0 = never
+    @return        the window; the caller destroys it
+    """
+    win = tk.Toplevel(parent)
+    win.wm_overrideredirect(True)
+    tk.Label(win, text=text, relief="solid", bd=1, padx=5, pady=2, wraplength=wrap, justify="left").pack()
+    win.update_idletasks()
+    width, height = win.winfo_reqwidth(), win.winfo_reqheight()
+    x, y = where(width, height)
+    win.wm_geometry("+%d+%d" % (max(0, min(x, win.winfo_screenwidth() - width)),
+                                max(0, min(y, win.winfo_screenheight() - height))))
+    return win
+
+
+def above(widget):
+    """@return a `where` for popup(): above the widget, below it if there is no room above"""
+    def where(_width, height):
+        y = widget.winfo_rooty() - height - 4
+        return widget.winfo_rootx(), y if y >= 0 else widget.winfo_rooty() + widget.winfo_height() + 4
+    return where
+
+
+def at_pointer(widget):
+    """@return a `where` for popup(): just above and right of the mouse pointer (below it at the top of the screen)"""
+    x, y = widget.winfo_pointerxy()
+
+    def where(_width, height):
+        above_pointer = y - height - POINTER_GAP_Y
+        return x + POINTER_GAP_X, above_pointer if above_pointer >= 0 else y + POINTER_CURSOR_HEIGHT
+    return where
+
+
 class Tip:
     """Small tooltip above a widget; the text is the language entry `key` (long text wraps, "\\n" = new line)."""
 
@@ -321,20 +365,36 @@ class Tip:
         self.job = None
         if not self.widget.winfo_exists():                    # the panel was rebuilt while the timer ran
             return
-        self.win = tk.Toplevel(self.widget)
-        self.win.wm_overrideredirect(True)
-        tk.Label(self.win, text=t(self.key), relief="solid", bd=1, padx=5, pady=2,
-                 wraplength=self.WRAP, justify="left").pack()
-        self.win.update_idletasks()
-        x = min(self.widget.winfo_rootx(), self.widget.winfo_screenwidth() - self.win.winfo_reqwidth())
-        y = self.widget.winfo_rooty() - self.win.winfo_reqheight() - 4
-        if y < 0:                                             # no room above: below instead
-            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
-        self.win.wm_geometry("+%d+%d" % (max(x, 0), y))
+        self.win = popup(self.widget, t(self.key), above(self.widget), self.WRAP)
 
     def _hide(self, _event=None):
         if self.job:
             self.widget.after_cancel(self.job)
+            self.job = None
+        if self.win:
+            self.win.destroy()
+            self.win = None
+
+
+class Toast:
+    """A short message next to the mouse pointer that closes itself; a new message replaces the one that is still showing."""
+
+    DURATION = 1500
+    """Milliseconds a message stays."""
+
+    def __init__(self, master):
+        """@param master  main window: it owns the message and its timer"""
+        self.master, self.job, self.win = master, None, None
+
+    def show(self, text):
+        """Show the message next to the mouse pointer."""
+        self.hide()
+        self.win = popup(self.master, text, at_pointer(self.master))
+        self.job = self.master.after(self.DURATION, self.hide)
+
+    def hide(self):
+        if self.job:
+            self.master.after_cancel(self.job)
             self.job = None
         if self.win:
             self.win.destroy()

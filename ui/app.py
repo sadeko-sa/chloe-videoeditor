@@ -23,7 +23,8 @@ from engine.preview import PreviewEngine, save_frame
 from engine.project import (PROJECT_EXT, AdjustmentLayer, EffectInstance, History, MediaLayer, Project, ProjectError,
                             even, load_project, save_project)
 from engine.selection import EffectSelection, move_block
-from ui.common import IS_MAC, IS_WIN, MOD, MOD_LABEL, Tip, clipboard_text, fmt_frame_name, fmt_time, set_clipboard
+from ui.common import (IS_MAC, IS_WIN, MOD, MOD_LABEL, Tip, Toast, clipboard_text, fmt_frame_name, fmt_time,
+                       set_clipboard)
 from ui.crop_assist import CropAssist
 from ui.dialogs import AboutDialog, GotoDialog, ProjectDialog, SettingsDialog
 from ui.export import ExportDialog
@@ -79,6 +80,7 @@ class App:
         self.jobs = JobQueue(cfg["workers"], cfg["worker_threads"],
                              lambda job: self.inbox.put(lambda: self._job_changed(job)))
         self.jobs_win = None
+        self.toast = Toast(self.root)
         self._build()
         self.update_title()
         self.root.after(40, self._poll)
@@ -992,8 +994,9 @@ class App:
         layer = self.selected()
         if layer is None or not layer.effects:
             return
-        picked = self.effect_sel.ordered() or None
-        set_clipboard(self.root, pr.to_text([pr.EffectPreset.from_layer(layer.name, layer, picked)]))
+        preset = pr.EffectPreset.from_layer(layer.name, layer, self.effect_sel.ordered() or None)
+        set_clipboard(self.root, pr.to_text([preset]))
+        self.toast.show(t("toast.effects_copied", count=len(preset.effect)))
 
     def paste_effects(self):
         """Put the effects of the effect preset text on the clipboard into the selected layer."""
