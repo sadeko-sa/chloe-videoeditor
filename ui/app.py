@@ -640,8 +640,13 @@ class App:
     def preview_size(self):
         """@return (width, height) of the preview picture: the frame fitted into the area, never above the project size"""
         p = self.project
-        cw, ch = max(self.canvas.winfo_width() - 8, 64), max(self.canvas.winfo_height() - 8, 64)
-        s = min(cw / p.width, ch / p.height, self.cfg["preview_max"] / max(p.width, p.height), 1.0)
+        cw, ch = self._canvas_size()
+        fit = min(cw / p.width, ch / p.height)
+        s = min(fit, self.cfg["preview_max"] / max(p.width, p.height), 1.0)
+        if s == fit and s < 1.0:
+            # limited by the area: round UP to the next even size (the canvas clips the extra pixel), rounding down
+            # would leave a 1 px margin when the area has an odd size
+            return max(2, int(math.ceil(p.width * s / 2.0)) * 2), max(2, int(math.ceil(p.height * s / 2.0)) * 2)
         return even(p.width * s), even(p.height * s)
 
     def request_preview(self, delay=50):
