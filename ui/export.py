@@ -1,4 +1,7 @@
-"""ui/export.py - The export dialog: container, video, dimension, audio and advanced options, queued as a job."""
+"""
+ui/export.py - The export dialog: container, video, dimension, audio and advanced options, queued as a job.
+Every field explains itself in a tooltip (language entries "tip.export.<field>"), there are no help texts in the window.
+"""
 
 import os
 import tkinter as tk
@@ -11,7 +14,7 @@ from engine import encode as enc
 from engine.compiler import CompileError, compile_export
 from engine.ffmpeg import Export
 from engine.jobs import QueueError
-from ui.common import Dialog, buttons_row, fmt_number
+from ui.common import Dialog, Tip, buttons_row, fmt_number
 
 
 class Choice:
@@ -52,6 +55,17 @@ def _optional(values):
     return [("", t("export.auto"))] + [(v, v) for v in values]
 
 
+def _tip(key, *widgets):
+    """
+    Give several widgets the same tooltip, so the label and its field both answer to the mouse (like in HandBrake).
+
+    @param key      language entry with the help text of the field, "tip.export.<field>"
+    @param widgets  widgets that show the tooltip
+    """
+    for widget in widgets:
+        Tip(widget, key)
+
+
 class ExportDialog(Dialog):
     """
     Pick the export options and the file; Queue / Start put the export into the queue (result "add" / "start").
@@ -73,11 +87,15 @@ class ExportDialog(Dialog):
         self.bitrate_var, self.two_pass_var = tk.StringVar(), tk.BooleanVar()
         self.fast_var, self.extra_var = tk.BooleanVar(), tk.StringVar()
         self.crf_text = tk.StringVar()
-        self._rows(frm, ((t("field.preset"), self.preset.box), (t("field.container"), self.container.box)))
-        ttk.Label(frm, text=t("field.output")).grid(row=2, column=0, sticky="w", pady=4)
+        self._rows(frm, ((t("field.preset"), self.preset.box, "tip.export.preset"),
+                         (t("field.container"), self.container.box, "tip.export.container")))
+        output_label = ttk.Label(frm, text=t("field.output"))
+        output_label.grid(row=2, column=0, sticky="w", pady=4)
         self.path_entry = ttk.Entry(frm, textvariable=self.path_var, width=44)
         self.path_entry.grid(row=2, column=1, sticky="we", padx=(12, 4))
-        ttk.Button(frm, text=t("btn.pick"), command=self._pick).grid(row=2, column=2)
+        pick = ttk.Button(frm, text=t("btn.pick"), command=self._pick)
+        pick.grid(row=2, column=2)
+        _tip("tip.export.output", output_label, self.path_entry, pick)
 
         self.nb = ttk.Notebook(frm)
         self.nb.grid(row=3, column=0, columnspan=3, sticky="we", pady=(10, 0))
@@ -106,10 +124,18 @@ class ExportDialog(Dialog):
 
     @staticmethod
     def _rows(page, rows, first=0):
-        """Put (label text, widget) pairs under each other: labels left, widgets stretched in column 1."""
-        for row, (text, widget) in enumerate(rows, first):
-            ttk.Label(page, text=text).grid(row=row, column=0, sticky="w", pady=4)
+        """
+        Put (label text, widget) pairs under each other: labels left, widgets stretched in column 1.
+
+        @param rows   (label text, widget) or (label text, widget, tooltip key); a tooltip shows over label and widget
+        @param first  grid row of the first pair
+        """
+        for row, (text, widget, *tip) in enumerate(rows, first):
+            label = ttk.Label(page, text=text)
+            label.grid(row=row, column=0, sticky="w", pady=4)
             widget.grid(row=row, column=1, sticky="w", padx=(12, 0))
+            if tip:
+                _tip(tip[0], label, widget)
 
     def _page(self, key):
         page = ttk.Frame(self.nb, padding=12)
@@ -122,23 +148,32 @@ class ExportDialog(Dialog):
         self.video = Choice(page, on_change=self._codec_changed)
         self.speed, self.tune = Choice(page), Choice(page)
         self.profile, self.level, self.depth = Choice(page), Choice(page), Choice(page)
-        self._rows(page, ((t("field.video_codec"), self.video.box), (t("field.speed"), self.speed.box),
-                          (t("field.tune"), self.tune.box), (t("field.profile"), self.profile.box),
-                          (t("field.level"), self.level.box), (t("field.bit_depth"), self.depth.box)))
-        ttk.Label(page, text=t("field.rate")).grid(row=6, column=0, sticky="w", pady=(10, 4))
+        self._rows(page, ((t("field.video_codec"), self.video.box, "tip.export.video_codec"),
+                          (t("field.speed"), self.speed.box, "tip.export.speed"),
+                          (t("field.tune"), self.tune.box, "tip.export.tune"),
+                          (t("field.profile"), self.profile.box, "tip.export.profile"),
+                          (t("field.level"), self.level.box, "tip.export.level"),
+                          (t("field.bit_depth"), self.depth.box, "tip.export.bit_depth")))
+        rate_label = ttk.Label(page, text=t("field.rate"))
+        rate_label.grid(row=6, column=0, sticky="w", pady=(10, 4))
+        _tip("tip.export.rate", rate_label)
         modes = ttk.Frame(page)
         modes.grid(row=6, column=1, sticky="w", padx=(12, 0), pady=(10, 4))
         for key, value in (("rate.quality", enc.RATE_QUALITY), ("rate.bitrate", enc.RATE_BITRATE)):
-            ttk.Radiobutton(modes, text=t(key), value=value, variable=self.rate_var,
-                            command=self._sync_state).pack(side="left", padx=(0, 12))
-        ttk.Label(page, text=t("field.crf")).grid(row=7, column=0, sticky="w", pady=4)
+            radio = ttk.Radiobutton(modes, text=t(key), value=value, variable=self.rate_var, command=self._sync_state)
+            radio.pack(side="left", padx=(0, 12))
+            _tip("tip.export.rate", radio)
+        crf_label = ttk.Label(page, text=t("field.crf"))
+        crf_label.grid(row=7, column=0, sticky="w", pady=4)
         crf = ttk.Frame(page)
         crf.grid(row=7, column=1, sticky="w", padx=(12, 0))
         self.crf_scale = ttk.Scale(crf, variable=self.crf_var, length=220, command=self._crf_moved)
         self.crf_scale.pack(side="left")
         self.crf_value = ttk.Label(crf, textvariable=self.crf_text, width=6)
         self.crf_value.pack(side="left", padx=(8, 0))
-        ttk.Label(page, text=t("field.bitrate")).grid(row=8, column=0, sticky="w", pady=4)
+        _tip("tip.export.crf", crf_label, self.crf_scale, self.crf_value)
+        bitrate_label = ttk.Label(page, text=t("field.bitrate"))
+        bitrate_label.grid(row=8, column=0, sticky="w", pady=4)
         rate = ttk.Frame(page)
         rate.grid(row=8, column=1, sticky="w", padx=(12, 0))
         self.bitrate_spin = ttk.Spinbox(rate, textvariable=self.bitrate_var, from_=enc.BITRATE_RANGE[0],
@@ -146,14 +181,15 @@ class ExportDialog(Dialog):
         self.bitrate_spin.pack(side="left")
         self.two_pass_check = ttk.Checkbutton(rate, text=t("check.two_pass"), variable=self.two_pass_var)
         self.two_pass_check.pack(side="left", padx=(12, 0))
-        ttk.Label(page, text=t("hint.export_video"), wraplength=420, justify="left").grid(
-            row=9, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        _tip("tip.export.bitrate", bitrate_label, self.bitrate_spin)
+        _tip("tip.export.two_pass", self.two_pass_check)
 
     def _tab_dimension(self):
         page = self._page("tab.dimension")
         self.height = Choice(page)
         self.fps = Choice(page)
-        self._rows(page, ((t("field.resolution"), self.height.box), (t("field.fps"), self.fps.box)))
+        self._rows(page, ((t("field.resolution"), self.height.box, "tip.export.resolution"),
+                          (t("field.fps"), self.fps.box, "tip.export.fps")))
         self.height.set_items([(0, t("export.same"))] + [(h, "%dp" % h) for h in enc.HEIGHTS if h])
         self.fps.set_items([("", t("export.same"))] +
                            [(f, fmt_number(enc.fps_value(f), 3)) for f in enc.FPS_CHOICES if f])
@@ -162,8 +198,10 @@ class ExportDialog(Dialog):
         page = self._page("tab.audio")
         self.audio = Choice(page, on_change=self._audio_changed)
         self.audio_rate, self.channels, self.sample_rate = Choice(page), Choice(page), Choice(page)
-        self._rows(page, ((t("field.audio_codec"), self.audio.box), (t("field.audio_bitrate"), self.audio_rate.box),
-                          (t("field.channels"), self.channels.box), (t("field.sample_rate"), self.sample_rate.box)))
+        self._rows(page, ((t("field.audio_codec"), self.audio.box, "tip.export.audio_codec"),
+                          (t("field.audio_bitrate"), self.audio_rate.box, "tip.export.audio_bitrate"),
+                          (t("field.channels"), self.channels.box, "tip.export.channels"),
+                          (t("field.sample_rate"), self.sample_rate.box, "tip.export.sample_rate")))
         self.channels.set_items([(0, t("export.auto")), (1, t("export.mono")), (2, t("export.stereo"))])
         self.sample_rate.set_items([(0, t("export.auto")), (44100, "44.1 kHz"), (48000, "48 kHz")])
 
@@ -171,10 +209,12 @@ class ExportDialog(Dialog):
         page = self._page("tab.advanced")
         self.fast_check = ttk.Checkbutton(page, text=t("check.faststart"), variable=self.fast_var)
         self.fast_check.grid(row=0, column=0, columnspan=2, sticky="w", pady=4)
-        ttk.Label(page, text=t("field.extra")).grid(row=1, column=0, sticky="w", pady=(10, 4))
-        ttk.Entry(page, textvariable=self.extra_var, width=44).grid(row=1, column=1, sticky="we", padx=(12, 0))
-        ttk.Label(page, text=t("hint.extra"), wraplength=420, justify="left").grid(
-            row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        _tip("tip.export.faststart", self.fast_check)
+        extra_label = ttk.Label(page, text=t("field.extra"))
+        extra_label.grid(row=1, column=0, sticky="w", pady=(10, 4))
+        extra_entry = ttk.Entry(page, textvariable=self.extra_var, width=44)
+        extra_entry.grid(row=1, column=1, sticky="we", padx=(12, 0))
+        _tip("tip.export.extra", extra_label, extra_entry)
 
     # ------------------------------------------------------------------ #
     # Options <-> widgets
