@@ -5,6 +5,7 @@ Small cross platform video editor (Windows, Linux, macOS) in Python / Tkinter. A
 
     python chloe_videoeditor.py [project (.cvproj), video or image]
 
+* Systems: Windows 7 or newer, Linux, macOS. On Windows 7 use Python 3.8 (the last Python that runs there); Windows XP and Vista are not supported.
 * Python 3.8+ with Tkinter. Drag and drop of media / projects onto the window needs `pip install tkinterdnd2` (optional; Settings > About shows whether it is on).
 * FFmpeg 4.4 or newer with `ffmpeg` and `ffprobe`:
   Windows `winget install ffmpeg` (or unpack it into `ffmpeg/bin` next to the program), macOS `brew install ffmpeg`,
