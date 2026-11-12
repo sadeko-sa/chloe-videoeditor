@@ -77,15 +77,18 @@ class EffectInstance:
         return cls(effect_id, eff.defaults() if eff else {})
 
     def to_dict(self) -> Dict[str, Any]:
-        return {"effect": self.effect_id, "enabled": self.enabled, "values": copy.deepcopy(self.values)}
+        return {"id": self.effect_id, "enabled": self.enabled, "values": copy.deepcopy(self.values)}
 
     @classmethod
     def from_dict(cls, data: Any) -> Optional["EffectInstance"]:
-        if not isinstance(data, dict) or not _text(data.get("effect")):
+        if not isinstance(data, dict):
             return None
-        eff = fx.get(data["effect"])
+        effect_id = data.get("id", data.get("effect"))      # "effect" is the key that older files use
+        if not _text(effect_id):
+            return None
+        eff = fx.get(effect_id)
         values = data.get("values") if isinstance(data.get("values"), dict) else {}
-        return cls(data["effect"], eff.normalize(values) if eff else dict(values), data.get("enabled") is not False)
+        return cls(effect_id, eff.normalize(values) if eff else dict(values), data.get("enabled") is not False)
 
 
 @dataclass

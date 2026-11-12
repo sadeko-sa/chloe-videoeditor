@@ -2,7 +2,7 @@
 preset.py - Presets of one category in one JSON file (no Tk in here).
 
 preset/<category>.json holds every preset of that category; "effect" is the only category so far:
-    {"category": "effect", "preset": [{"name": "Warm look", "effect": [{"effect": "...", "enabled": true, "values": {}}]}]}
+    {"category": "effect", "preset": [{"name": "Warm look", "effect": [{"id": "...", "enabled": true, "values": {}}]}]}
 An exported file has the same layout, so importing is a merge of two such files. The same text is what the
 clipboard holds when effects are copied, so a copy can be pasted into a layer, into the preset manager or a chat.
 """
