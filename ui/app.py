@@ -814,17 +814,19 @@ class App:
             self.add_media(list(paths))
 
     def add_media(self, paths):
-        """Probe the files and put each on top as a media layer."""
+        """Probe the files and put each as a media layer above the selected layer (on top if none is selected)."""
         if not self.tools:
             messagebox.showwarning(t("dlg.error"), t("msg.no_ffmpeg"), parent=self.root)
             return
         added = None
+        pos = self._above_selected()
         self.root.configure(cursor="watch")
         self.root.update_idletasks()
         try:
             for path in paths:
                 try:
-                    added = self.project.add_media(ff.probe(self.tools, path))
+                    added = self.project.add_media(ff.probe(self.tools, path), pos)
+                    pos += 1                        # the next file goes above this one
                 except ff.FFmpegError as exc:
                     messagebox.showerror(t("dlg.error"), t("msg.cannot_open", name=os.path.basename(path), error=exc),
                                          parent=self.root)
@@ -839,10 +841,15 @@ class App:
     def add_adjustment(self):
         count = sum(isinstance(l, AdjustmentLayer) for l in self.project.layers) + 1
         layer = AdjustmentLayer("%s %d" % (t("kind.adjustment"), count))
-        self.project.layers.append(layer)
+        self.project.layers.insert(self._above_selected(), layer)
         self.sel_layer, self.effect_sel = layer.id, EffectSelection.none()
         self.refresh_all()
         self.touch()
+
+    def _above_selected(self):
+        """@return index in project.layers for a new layer: right above the selected layer, like Photoshop (top if none)"""
+        layer = self.selected()
+        return self.project.layers.index(layer) + 1 if layer is not None else len(self.project.layers)
 
     def remove_layer(self):
         layer = self.selected()

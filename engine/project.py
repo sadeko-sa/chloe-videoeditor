@@ -237,12 +237,13 @@ class Project:
         """@return the layer with this id, or None"""
         return next((l for l in self.layers if l.id == layer_id), None)
 
-    def add_media(self, info: MediaInfo) -> MediaLayer:
+    def add_media(self, info: MediaInfo, index: Optional[int] = None) -> MediaLayer:
         """
-        Put a media file on top. The first media file sets the frame size and rate of the project.
+        Put a media file on top (or at `index`). The first media file sets the frame size and rate of the project.
 
-        @param info  result of probing the file
-        @return      the new layer
+        @param info   result of probing the file
+        @param index  position in `layers` to insert at (the end of the list = the top); None = on top
+        @return       the new layer
         """
         if not self.media_layers():
             self.width, self.height = even(info.width), even(info.height)
@@ -255,7 +256,10 @@ class Project:
         layer = MediaLayer(os.path.splitext(os.path.basename(info.path))[0] or "Media",
                            duration=length, path=info.path, source_duration=info.duration,
                            has_audio=info.has_audio, is_image=info.is_image)
-        self.layers.append(layer)
+        if index is None:
+            self.layers.append(layer)
+        else:
+            self.layers.insert(max(0, min(index, len(self.layers))), layer)
         return layer
 
     def to_dict(self) -> Dict[str, Any]:
