@@ -6,10 +6,11 @@ combination valid. No Tk and no processes in here.
 
 from __future__ import annotations
 
+import re
 import shlex
 from dataclasses import asdict, dataclass, fields, replace
 from fractions import Fraction
-from typing import AbstractSet, Any, Dict, List, Optional, Tuple
+from typing import AbstractSet, Any, Dict, List, Mapping, Optional, Tuple
 
 NO_AUDIO = "none"
 """Audio codec code of an export without sound."""
@@ -36,6 +37,22 @@ CHANNELS = (0, 1, 2)
 SAMPLE_RATES = (0, 44100, 48000)
 """Audio sample rates in Hz; 0 = as mixed by the project."""
 
+DEPTHS = (8, 10, 12)
+"""Bit depths (bits per color channel) the program can write. Which of them an encoder offers is read from its FFmpeg
+help (Tools.depths); the tables below do not say."""
+
+
+def pix_fmt(depth: int) -> str:
+    """@return FFmpeg name of the 4:2:0 pixel format with this bit depth, for example 10 gives yuv420p10le"""
+    return "yuv420p" if depth == 8 else "yuv420p%dle" % depth
+
+
+def depth_of(fmt: str) -> int:
+    """@return bit depth (one of DEPTHS) of a 4:2:0 pixel format name as FFmpeg lists it; 0 for any other format"""
+    found = re.fullmatch(r"yuv420p(?:(\d+)le)?", fmt)
+    depth = (int(found.group(1)) if found.group(1) else 8) if found else 0
+    return depth if depth in DEPTHS else 0
+
 _X26X_SPEEDS = ("ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow")
 
 
@@ -59,7 +76,7 @@ class VideoCodec:
     @param tunes       tune values, () = none offered
     @param profiles    profile values, () = none offered
     @param levels      level values, () = none offered
-    @param ten_bit     True if a 10-bit picture is offered
+    @param deep_profiles  profile values for a bit depth above 8 (profiles is for 8-bit), () = none offered
     @param two_pass    True if two-pass average bitrate is offered
     """
     label: str
@@ -72,7 +89,7 @@ class VideoCodec:
     tunes: Tuple[str, ...] = ()
     profiles: Tuple[str, ...] = ()
     levels: Tuple[str, ...] = ()
-    ten_bit: bool = False
+    deep_profiles: Tuple[str, ...] = ()
     two_pass: bool = False
 
 
@@ -101,15 +118,16 @@ VIDEO: Dict[str, VideoCodec] = {
     "x264": VideoCodec("H.264", "libx264", ("mp4", "mkv"), (0, 51, 21), "-preset", _X26X_SPEEDS, "medium",
                        tunes=("film", "animation", "grain", "stillimage", "fastdecode", "zerolatency"),
                        profiles=("baseline", "main", "high"),
-                       levels=("3.0", "3.1", "4.0", "4.1", "4.2", "5.0", "5.1", "5.2"), two_pass=True),
+                       levels=("3.0", "3.1", "4.0", "4.1", "4.2", "5.0", "5.1", "5.2"), deep_profiles=("high10",),
+                       two_pass=True),
     "x265": VideoCodec("H.265", "libx265", ("mp4", "mkv"), (0, 51, 25), "-preset", _X26X_SPEEDS, "medium",
-                       tunes=("animation", "grain", "fastdecode", "zerolatency"), ten_bit=True),
+                       tunes=("animation", "grain", "fastdecode", "zerolatency")),
     "vp9": VideoCodec("VP9", "libvpx-vp9", ("mkv", "webm"), (0, 63, 31), "-cpu-used",
-                      tuple(str(i) for i in range(6)), "2", ten_bit=True, two_pass=True),
+                      tuple(str(i) for i in range(6)), "2", two_pass=True),
     "svtav1": VideoCodec("AV1 (SVT-AV1)", "libsvtav1", ("mp4", "mkv", "webm"), (0, 63, 32), "-preset",
-                         tuple(str(i) for i in range(14)), "8", ten_bit=True),
+                         tuple(str(i) for i in range(14)), "8"),
     "aom": VideoCodec("AV1 (libaom)", "libaom-av1", ("mp4", "mkv", "webm"), (0, 63, 32), "-cpu-used",
-                      tuple(str(i) for i in range(9)), "4", ten_bit=True),
+                      tuple(str(i) for i in range(9)), "4"),
 }
 
 AUDIO: Dict[str, AudioCodec] = {
@@ -150,6 +168,23 @@ def containers(encoders: Optional[AbstractSet[str]] = None) -> List[str]:
     return [c for c in CONTAINERS if video_codecs(c, encoders)]
 
 
+def bit_depths(video: str, depths: Optional[Mapping[str, Tuple[int, ...]]] = None) -> List[int]:
+    """
+    @param video   key of VIDEO
+    @param depths  {encoder name: bit depths its FFmpeg help lists} (Tools.depths); None = do not check
+    @return        every bit depth offered for the codec, lowest first; just 8 if FFmpeg lists none for the encoder
+    """
+    if depths is None:
+        return list(DEPTHS)
+    return [d for d in DEPTHS if d in depths.get(VIDEO[video].encoder, ())] or [8]
+
+
+def profiles_for(video: str, depth: int) -> Tuple[str, ...]:
+    """@return profile values the codec offers at a bit depth (an 8-bit profile makes the encoder fail above 8 bit)"""
+    v = VIDEO[video]
+    return v.profiles if depth == 8 else v.deep_profiles
+
+
 def _pick(value: Any, allowed, default: Any) -> Any:
     return value if value in allowed else default
 
@@ -178,7 +213,7 @@ class ExportOptions:
     @param tune           tune value, "" = none
     @param profile        profile value, "" = encoder decides
     @param level          level value, "" = encoder decides
-    @param bit_depth      8 or 10
+    @param bit_depth      bits per color channel, one of DEPTHS
     @param fps            entry of FPS_CHOICES
     @param height         entry of HEIGHTS
     @param audio          key of AUDIO, NO_AUDIO or COPY_AUDIO
@@ -208,9 +243,11 @@ class ExportOptions:
     faststart: bool = True
     extra: str = ""
 
-    def normalized(self, encoders: Optional[AbstractSet[str]] = None) -> ExportOptions:
+    def normalized(self, encoders: Optional[AbstractSet[str]] = None,
+                   depths: Optional[Mapping[str, Tuple[int, ...]]] = None) -> ExportOptions:
         """
         @param encoders  names of the encoders this FFmpeg has; None = do not check
+        @param depths    bit depths each encoder offers in this FFmpeg (Tools.depths, see bit_depths()); None = do not check
         @return          options where every value is allowed and the combination fits (wrong values replaced by defaults)
         """
         usable = containers(encoders)
@@ -222,6 +259,7 @@ class ExportOptions:
         sounds = audio_codecs(container, encoders)
         audio = _pick(self.audio, sounds + [NO_AUDIO, COPY_AUDIO], sounds[0] if sounds else NO_AUDIO)
         lossy = AUDIO[audio].bitrates if audio in AUDIO else ()
+        depth = _pick(self.bit_depth, bit_depths(video, depths), 8)
         return replace(
             self, container=container, video=video, rate=rate,
             crf=_clamp(self.crf, v.crf[0], v.crf[1]),
@@ -229,9 +267,9 @@ class ExportOptions:
             two_pass=bool(self.two_pass and v.two_pass and rate == RATE_BITRATE),
             speed=_pick(self.speed, v.speeds, v.speed),
             tune=_pick(self.tune, v.tunes, ""),
-            profile=_pick(self.profile, v.profiles, ""),
+            profile=_pick(self.profile, profiles_for(video, depth), ""),
             level=_pick(self.level, v.levels, ""),
-            bit_depth=10 if self.bit_depth == 10 and v.ten_bit else 8,
+            bit_depth=depth,
             fps=_pick(self.fps, FPS_CHOICES, ""),
             height=_pick(self.height, HEIGHTS, 0),
             audio=audio,
@@ -247,10 +285,12 @@ class ExportOptions:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: Any, encoders: Optional[AbstractSet[str]] = None) -> ExportOptions:
+    def from_dict(cls, data: Any, encoders: Optional[AbstractSet[str]] = None,
+                  depths: Optional[Mapping[str, Tuple[int, ...]]] = None) -> ExportOptions:
         """
         @param data      dict from a config file; unknown keys are ignored, wrong values replaced by defaults
         @param encoders  see normalized()
+        @param depths    see normalized()
         """
         base, values = cls(), {}
         for f in fields(cls):
@@ -263,7 +303,7 @@ class ExportOptions:
                 values[f.name] = default if raw is None else type(default)(raw)
             except (TypeError, ValueError):
                 values[f.name] = default
-        return cls(**values).normalized(encoders)
+        return cls(**values).normalized(encoders, depths)
 
     def extra_args(self) -> List[str]:
         """@return the extra options as an argument list @raise ValueError if the text cannot be split (quotes)"""
@@ -310,7 +350,7 @@ class ExportOptions:
         for flag, value in (("-tune", self.tune), ("-profile:v", self.profile), ("-level", self.level)):
             if value:
                 args += [flag, value]
-        args += ["-pix_fmt", "yuv420p10le" if self.bit_depth == 10 else "yuv420p"]
+        args += ["-pix_fmt", pix_fmt(self.bit_depth)]
         if self.fps:
             args += ["-r", self.fps]
         return args
@@ -357,6 +397,7 @@ PRESETS: Dict[str, ExportOptions] = {
 """Presets of the export dialog; language entry \"export.preset.<key>\" names each."""
 
 
-def available_presets(encoders: Optional[AbstractSet[str]] = None) -> Dict[str, ExportOptions]:
-    """@return the presets whose encoders are all in `encoders`"""
-    return {k: o for k, o in PRESETS.items() if o.normalized(encoders) == o}
+def available_presets(encoders: Optional[AbstractSet[str]] = None,
+                      depths: Optional[Mapping[str, Tuple[int, ...]]] = None) -> Dict[str, ExportOptions]:
+    """@return the presets whose encoders and bit depths are all there; see normalized()"""
+    return {k: o for k, o in PRESETS.items() if o.normalized(encoders, depths) == o}

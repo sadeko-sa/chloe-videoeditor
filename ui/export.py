@@ -74,9 +74,9 @@ class ExportDialog(Dialog):
 
     def __init__(self, app):
         super().__init__(app.root, "dlg.export")
-        self.app, self.encoders = app, app.tools.encoders
-        self.last = enc.ExportOptions.from_dict(app.cfg["export"], self.encoders)
-        self.presets = enc.available_presets(self.encoders)
+        self.app, self.encoders, self.depths = app, app.tools.encoders, app.tools.depths
+        self.last = enc.ExportOptions.from_dict(app.cfg["export"], self.encoders, self.depths)
+        self.presets = enc.available_presets(self.encoders, self.depths)
         frm = ttk.Frame(self, padding=14)
         frm.pack(fill="both", expand=True)
         frm.columnconfigure(1, weight=1)
@@ -147,7 +147,8 @@ class ExportDialog(Dialog):
         page = self._page("tab.video")
         self.video = Choice(page, on_change=self._codec_changed)
         self.speed, self.tune = Choice(page), Choice(page)
-        self.profile, self.level, self.depth = Choice(page), Choice(page), Choice(page)
+        self.profile, self.level = Choice(page), Choice(page)
+        self.depth = Choice(page, on_change=self._depth_changed)
         self._rows(page, ((t("field.video_codec"), self.video.box, "tip.export.video_codec"),
                           (t("field.speed"), self.speed.box, "tip.export.speed"),
                           (t("field.tune"), self.tune.box, "tip.export.tune"),
@@ -233,20 +234,21 @@ class ExportDialog(Dialog):
             level=self.level.code or "", bit_depth=self.depth.code or 8, fps=self.fps.code or "",
             height=self.height.code or 0, audio=self.audio.code, audio_bitrate=self.audio_rate.code or 0,
             channels=self.channels.code or 0, sample_rate=self.sample_rate.code or 0,
-            faststart=self.fast_var.get(), extra=self.extra_var.get()).normalized(self.encoders)
+            faststart=self.fast_var.get(), extra=self.extra_var.get()).normalized(self.encoders, self.depths)
 
     def _apply(self, options):
         """Show options: fill every list that depends on the container and the codecs, then every value."""
-        o = options.normalized(self.encoders)
+        o = options.normalized(self.encoders, self.depths)
         v = enc.VIDEO[o.video]
         self.container.select(o.container)
         self.video.set_items([(c, enc.VIDEO[c].label) for c in enc.video_codecs(o.container, self.encoders)])
         self.video.select(o.video)
         self.speed.set_items([(s, s) for s in v.speeds])
         self.tune.set_items(_optional(v.tunes) if v.tunes else [])
-        self.profile.set_items(_optional(v.profiles) if v.profiles else [])
+        profiles = enc.profiles_for(o.video, o.bit_depth)       # an 8-bit profile makes the encoder fail above 8 bit
+        self.profile.set_items(_optional(profiles) if profiles else [])
         self.level.set_items(_optional(v.levels) if v.levels else [])
-        self.depth.set_items([(8, "8-bit")] + ([(10, "10-bit")] if v.ten_bit else []))
+        self.depth.set_items([(d, "%d-bit" % d) for d in enc.bit_depths(o.video, self.depths)])
         for box, code in ((self.speed, o.speed), (self.tune, o.tune), (self.profile, o.profile),
                           (self.level, o.level), (self.depth, o.bit_depth)):
             box.select(code)
@@ -277,7 +279,7 @@ class ExportDialog(Dialog):
         v, quality = enc.VIDEO[o.video], o.rate == enc.RATE_QUALITY
         for box in (self.tune, self.profile, self.level):
             box.enable(True)
-        self.depth.enable(v.ten_bit)
+        self.depth.enable(len(enc.bit_depths(o.video, self.depths)) > 1)
         for widget in (self.crf_scale, self.crf_value):
             widget.state(["!disabled"] if quality else ["disabled"])
         self.bitrate_spin.state(["disabled"] if quality else ["!disabled"])
@@ -312,6 +314,10 @@ class ExportDialog(Dialog):
         """A new video codec starts with its own default quality, speed and no tune, profile or level."""
         v = enc.VIDEO[self.video.code]
         self._apply(replace(self._collect(), crf=v.crf[2], speed=v.speed, tune="", profile="", level=""))
+
+    def _depth_changed(self):
+        """A new bit depth: a profile that does not fit it is dropped and the profile list shows the ones that do."""
+        self._apply(self._collect())
 
     def _audio_changed(self):
         code = self.audio.code

@@ -13,12 +13,12 @@ import signal
 import subprocess
 import sys
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from fractions import Fraction
-from typing import Callable, FrozenSet, List, Optional
+from typing import Callable, Dict, FrozenSet, List, Optional, Tuple
 
 from .compiler import Job
-from .encode import COPY_AUDIO, ExportOptions
+from .encode import COPY_AUDIO, VIDEO, ExportOptions, depth_of
 from .project import IMAGE_EXTS, IMAGE_SECONDS, MediaInfo
 
 IS_WIN = os.name == "nt"
@@ -43,6 +43,8 @@ class Tools:
     ffprobe: str
     version: str
     encoders: FrozenSet[str]
+    depths: Dict[str, Tuple[int, ...]] = field(default_factory=dict)
+    """Bit depths each video encoder lists in its FFmpeg help: {encoder name: (8, 10, ...)}."""
 
 
 # --------------------------------------------------------------------------- #
@@ -148,6 +150,30 @@ def _version(text: str) -> tuple:
     return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
 
 
+def _bit_depths(ffmpeg: str, encoders: FrozenSet[str]) -> Dict[str, Tuple[int, ...]]:
+    """
+    Ask FFmpeg which bit depths the video encoders can write: the help of an encoder lists its pixel formats.
+
+    @param ffmpeg    path of the ffmpeg file
+    @param encoders  encoders this FFmpeg has
+    @return          {encoder name: bit depths of its 4:2:0 pixel formats, lowest first}; an encoder that gives no
+                     answer is left out (the dialog then offers 8-bit only)
+    """
+    found = {}
+    for codec in VIDEO.values():
+        if codec.encoder not in encoders:
+            continue
+        try:
+            text = run([ffmpeg, "-hide_banner", "-h", "encoder=" + codec.encoder], 15)
+        except FFmpegError:
+            continue
+        formats = re.search(r"Supported pixel formats:(.*)", text)
+        depths = sorted({depth_of(f) for f in formats.group(1).split()} - {0}) if formats else []
+        if depths:
+            found[codec.encoder] = tuple(depths)
+    return found
+
+
 def locate(configured: str = "") -> Optional[Tools]:
     """
     Find a working FFmpeg + FFprobe.
@@ -165,7 +191,7 @@ def locate(configured: str = "") -> Optional[Tools]:
         return None
     encoders = frozenset(m.group(1) for m in re.finditer(r"^\s[VAS][\w.]{5}\s+(\S+)", listing, re.M))
     shown = re.search(r"version\s+(\S+)", first)
-    return Tools(ffmpeg, ffprobe, shown.group(1) if shown else "?", encoders)
+    return Tools(ffmpeg, ffprobe, shown.group(1) if shown else "?", encoders, _bit_depths(ffmpeg, encoders))
 
 
 def too_old(tools: Tools) -> bool:
