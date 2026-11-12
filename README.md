@@ -53,7 +53,7 @@ An effect that needs branches (for example a blurred copy that is blended back) 
 
 ## Languages and themes
 
-`lang/<code>.json` and `theme/<code>.json`, same format as Chloe Photoviewer (English and Japanese included, six themes). Choose the language in the Language root menu (or Settings > Language) and the theme in the Settings menu > Theme (or Settings > Appearance; both used from the next start; languages are listed as English name - native name, e.g. Japanese - 日本語); *Settings > Theme > Edit theme...* edits a theme file. The Settings dialog is in its own Settings menu (Ctrl+,).
+`lang/<code>.json` and `theme/<code>.json`, same format as Chloe Photoviewer (English and Japanese included, six themes). Choose the language in the Language root menu (or Settings > Language) and the theme in the Settings menu > Theme (or Settings > Appearance; both used after a restart, which the program offers at once; languages are listed as English name - native name, e.g. Japanese - 日本語); *Settings > Theme > Edit theme...* edits a theme file. The Settings dialog is in its own Settings menu (Ctrl+,).
 
 ## Files
 

@@ -4,6 +4,8 @@ import datetime
 import math
 import os
 import queue
+import subprocess
+import sys
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -285,7 +287,7 @@ class App:
         self.cfg["theme"] = code
         self.save_config()
         self.theme_var.set(code)
-        messagebox.showinfo(t("dlg.restart"), t("msg.restart"), parent=self.root)
+        self.offer_restart()
 
     def edit_theme(self):
         """Open the theme editor on the current theme; a theme saved there becomes the chosen one."""
@@ -306,7 +308,7 @@ class App:
             return
         self.cfg["language"] = code
         self.save_config()
-        messagebox.showinfo(t("dlg.restart"), t("msg.restart"), parent=self.root)
+        self.offer_restart()
 
     @staticmethod
     def _key(command):
@@ -352,10 +354,11 @@ class App:
         self.root.mainloop()
 
     def quit(self):
+        """Close the program after asking about unsaved changes and running jobs. @return False if the user declined"""
         if not self.confirm_discard():
-            return
+            return False
         if self.jobs.active_count() and not messagebox.askyesno(t("dlg.export"), t("msg.quit_jobs"), parent=self.root):
-            return
+            return False
         try:
             zoomed = self.root.state() == "zoomed" if IS_WIN or IS_MAC else bool(self.root.attributes("-zoomed"))
         except tk.TclError:
@@ -367,6 +370,19 @@ class App:
         self.jobs.shutdown()
         self.engine.close()
         self.root.destroy()
+        return True
+
+    def offer_restart(self):
+        """The language or theme was saved and is used from the next start: ask whether to restart now."""
+        if messagebox.askyesno(t("dlg.restart"), t("msg.restart"), parent=self.root):
+            self.restart()
+
+    def restart(self):
+        """Close the program like quit() and start it again with the project that is open (if it is saved)."""
+        path = self.project_path
+        if self.quit():
+            args = [path] if path and os.path.isfile(path) else []
+            subprocess.Popen([sys.executable, os.path.abspath(sys.argv[0])] + args, close_fds=True)
 
     def _poll(self):
         """Run what worker threads left in the inbox."""

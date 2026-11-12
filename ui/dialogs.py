@@ -3,7 +3,7 @@
 import os
 import sys
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, ttk
 
 from lang import list_languages, resolve_language, t
 from theme import ThemeDialog, list_themes, resolve_theme
@@ -207,7 +207,7 @@ class SettingsDialog(Dialog):
         app.apply_settings(ffmpeg_changed=old[2] != cfg["ffmpeg"], cache_changed=old[3] != cfg["cache_dir"])
         self.destroy()
         if old[:2] != (cfg["language"], cfg["theme"]):
-            messagebox.showinfo(t("dlg.restart"), t("msg.restart"), parent=app.root)
+            app.offer_restart()
 
 
 class ProjectDialog(Dialog):
