@@ -9,8 +9,8 @@ from engine import effect as fx
 from engine import preset as pr
 from engine.project import FITS, MediaLayer
 from engine.selection import EffectSelection
-from ui.common import (Tip, category_label, choice_label, effect_name, fmt_number, group_label, highlight_fade,
-                       param_label, text_or)
+from ui.common import (MOD_LABEL, Tip, bind_shortcut, category_label, choice_label, effect_name, fmt_number,
+                       group_label, highlight_fade, param_label, text_or)
 from ui.curve_editor import CurveEditor
 
 ON, OFF = "\u2611", "\u2610"
@@ -374,6 +374,8 @@ class EffectPanel(ttk.LabelFrame):
         self.tree.bind("<<TreeviewSelect>>", self._selected)
         self.tree.bind("<Button-1>", self._click)
         self.tree.bind("<Delete>", lambda e: app.remove_effect())
+        bind_shortcut(self.tree, "c", app.copy_effects)
+        bind_shortcut(self.tree, "v", app.paste_effects)
         self.params = ParamEditor(self, app)
         self.params.pack(fill="x")
 
@@ -402,6 +404,11 @@ class EffectPanel(ttk.LabelFrame):
         menu.add_command(label=t("menu.preset_save"), command=self.app.save_preset_dialog,
                          state="normal" if layer and layer.effects else "disabled")
         menu.add_command(label=t("menu.preset_manage"), command=self.app.preset_manager)
+        menu.add_separator()
+        menu.add_command(label=t("menu.effect_copy"), accelerator=MOD_LABEL + "+C", command=self.app.copy_effects,
+                         state="normal" if layer and layer.effects else "disabled")
+        menu.add_command(label=t("menu.effect_paste"), accelerator=MOD_LABEL + "+V", command=self.app.paste_effects,
+                         state="normal" if layer else "disabled")
         x, y = self.preset_btn.winfo_rootx(), self.preset_btn.winfo_rooty() + self.preset_btn.winfo_height()
         try:
             menu.tk_popup(x, y)

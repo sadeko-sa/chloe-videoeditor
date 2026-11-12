@@ -4,7 +4,6 @@ import datetime
 import math
 import os
 import queue
-import sys
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -24,7 +23,7 @@ from engine.preview import PreviewEngine, save_frame
 from engine.project import (PROJECT_EXT, AdjustmentLayer, EffectInstance, History, MediaLayer, Project, ProjectError,
                             even, load_project, save_project)
 from engine.selection import EffectSelection, move_block
-from ui.common import IS_WIN, Tip, fmt_frame_name, fmt_time
+from ui.common import IS_MAC, IS_WIN, MOD, MOD_LABEL, Tip, clipboard_text, fmt_frame_name, fmt_time, set_clipboard
 from ui.crop_assist import CropAssist
 from ui.dialogs import AboutDialog, GotoDialog, ProjectDialog, SettingsDialog
 from ui.export import ExportDialog
@@ -39,7 +38,6 @@ except ImportError:
 
 MEDIA_TYPES = [("Video / image", "*.mp4 *.mov *.mkv *.avi *.webm *.m4v *.mpg *.mpeg *.wmv *.flv *.gif "
                                  "*.png *.jpg *.jpeg *.bmp *.webp *.tif *.tiff"), ("*", "*.*")]
-IS_MAC = sys.platform == "darwin"
 BUSY_DELAY = 250
 """Milliseconds a preview may take before the loading bar shows (a quick one never flashes it)."""
 BUSY_STEP = 16
@@ -195,8 +193,7 @@ class App:
     def _menus(self):
         root = self.root
         bar = tk.Menu(root)
-        mod = "Command" if IS_MAC else "Control"
-        label = "Cmd" if IS_MAC else "Ctrl"
+        mod, label = MOD, MOD_LABEL
 
         def add(menu, key, command, char=None, shift=False, alt=False):
             """Menu entry with its keyboard shortcut (Ctrl, or Cmd on macOS)."""
@@ -230,7 +227,7 @@ class App:
         add(edit, "menu.redo", self.redo, "z", True)
         edit.add_separator()
         add(edit, "menu.project", lambda: self.project_settings())
-        add(edit, "menu.duplicate", self.duplicate_layer, "d")
+        add(edit, "menu.duplicate", self.duplicate, "j")
         edit.add_separator()
         add(edit, "menu.goto", self.goto_dialog, "g")
         bar.add_cascade(label=t("menu.file"), menu=file_menu)
@@ -836,6 +833,17 @@ class App:
         self.refresh_all()
         self.touch()
 
+    def duplicate(self):
+        """Ctrl+J like Photoshop: the selected effects if the effect list has the keyboard focus, else the selected layer."""
+        try:
+            in_effects = self.root.focus_get() is self.effects.tree
+        except KeyError:                            # Tk reports some pop-up widgets that way
+            in_effects = False
+        if in_effects:
+            self.duplicate_effects()
+        else:
+            self.duplicate_layer()
+
     def duplicate_layer(self):
         layer = self.selected()
         if layer is None:
@@ -954,16 +962,51 @@ class App:
 
     def apply_preset(self, preset):
         """Put the effect chain of a preset into the selected layer, in the place a new effect would go, and select it."""
+        self._insert_effects(preset.instance())
+
+    def _insert_effects(self, instance):
+        """
+        Put effects into the selected layer in the place a new effect would go (one undo step) and select all of them,
+        the top one active.
+
+        @param instance  list of EffectInstance, not used anywhere else; empty = nothing happens
+        """
         layer = self.selected()
-        instance = preset.instance()
         if layer is None or not instance:
             return
         at = self._insert_position(layer)
         layer.effects[at:at] = instance
-        self.effect_sel = EffectSelection.of(range(at, at + len(instance)), at + len(instance) - 1)   # all of it, top active
+        self.effect_sel = EffectSelection.of(range(at, at + len(instance)), at + len(instance) - 1)
         self.effects.refresh(layer, self.effect_sel)
         self.effects.tree.focus_set()               # the list has the keyboard focus: Delete removes the selected effects
         self.touch()
+
+    def duplicate_effects(self):
+        """Copy the selected effects and put the copies right above them (one undo step); the copies get selected."""
+        layer, picked = self.selected(), self.effect_sel.ordered()
+        if layer is not None and picked:
+            self._insert_effects(pr.EffectPreset.from_layer("", layer, picked).effect)
+
+    def copy_effects(self):
+        """Put the selected effects (the whole chain if none is selected) on the clipboard as effect preset text."""
+        layer = self.selected()
+        if layer is None or not layer.effects:
+            return
+        picked = self.effect_sel.ordered() or None
+        set_clipboard(self.root, pr.to_text([pr.EffectPreset.from_layer(layer.name, layer, picked)]))
+
+    def paste_effects(self):
+        """Put the effects of the effect preset text on the clipboard into the selected layer."""
+        if self.selected() is None:
+            return
+        try:
+            instance = pr.chain(pr.from_text(clipboard_text(self.root)))
+        except pr.PresetError:
+            instance = []
+        if instance:
+            self._insert_effects(instance)
+        else:
+            self._say(t("preset.clipboard_invalid"), error=True)
 
     def save_preset_dialog(self):
         """Save the whole effect chain of the selected layer as a preset."""

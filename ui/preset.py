@@ -9,7 +9,7 @@ from theme import resolve_color
 
 from engine import effect as fx
 from engine import preset as pr
-from ui.common import Dialog, effect_name, fmt_number, ok_cancel, param_label
+from ui.common import Dialog, clipboard_text, effect_name, fmt_number, ok_cancel, param_label
 
 JSON_TYPE = [("JSON", "*.json")]
 DETAIL_WIDTH = 300
@@ -84,6 +84,7 @@ class PresetManager(Dialog):
         ttk.Button(bottom, text=t("preset.close"), command=self.destroy).pack(side="right")
         ttk.Button(bottom, text=t("preset.export"), command=self._export).pack(side="right", padx=(0, 6))
         ttk.Button(bottom, text=t("preset.import"), command=self._import).pack(side="right", padx=(0, 3))
+        ttk.Button(bottom, text=t("preset.paste"), command=self._paste).pack(side="right", padx=(0, 3))
 
         panes = ttk.PanedWindow(frm, orient="horizontal")
         panes.pack(fill="both", expand=True)
@@ -256,7 +257,22 @@ class PresetManager(Dialog):
             messagebox.showerror(t("dlg.error"), t("preset.import_failed", file=os.path.basename(path), error=exc),
                                  parent=self)
             return
-        for p in new:                                       # a name already in use gets a number, nothing is overwritten
+        self._add(new)
+
+    def _paste(self):
+        """Add the preset of the effect preset text on the clipboard."""
+        try:
+            new = pr.from_text(clipboard_text(self))
+        except pr.PresetError:
+            new = []
+        if new:
+            self._add(new)
+        else:
+            messagebox.showerror(t("dlg.error"), t("preset.clipboard_invalid"), parent=self)
+
+    def _add(self, new):
+        """Append new preset (a name already in use gets a number, nothing is overwritten), save, show and select them."""
+        for p in new:
             p.name = pr.unique_name(p.name, [q.name for q in self.preset])
             self.preset.append(p)
         if new:

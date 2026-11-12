@@ -15,6 +15,12 @@ from theme import resolve_color
 
 from engine.ffmpeg import IS_WIN
 
+IS_MAC = sys.platform == "darwin"
+MOD = "Command" if IS_MAC else "Control"
+"""Tk name of the key for shortcuts: Cmd on macOS, else Ctrl."""
+MOD_LABEL = "Cmd" if IS_MAC else "Ctrl"
+"""The same key as shown in menus."""
+
 
 def _png(width, height, rgba):
     """
@@ -130,6 +136,37 @@ def win_setup():
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("ChloeVideoeditor")
     except Exception:
         pass
+
+
+def bind_shortcut(widget, char, command):
+    """
+    Run `command` when Ctrl+<char> (Cmd on macOS) is pressed while `widget` has the keyboard focus, with Caps Lock on
+    or off. The key does not reach the widget's own bindings.
+
+    @param widget   widget to bind
+    @param char     one letter
+    @param command  function without arguments
+    """
+    def run(_event):
+        command()
+        return "break"
+
+    for key in {char.lower(), char.upper()}:
+        widget.bind("<%s-%s>" % (MOD, key), run)
+
+
+def clipboard_text(widget):
+    """@return the text on the clipboard; empty if there is none (or it is no text)"""
+    try:
+        return widget.clipboard_get()
+    except tk.TclError:
+        return ""
+
+
+def set_clipboard(widget, text):
+    """Replace the content of the clipboard by `text`."""
+    widget.clipboard_clear()
+    widget.clipboard_append(text)
 
 
 def text_or(key, fallback):
