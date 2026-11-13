@@ -223,3 +223,47 @@ class Denoise(ChainEffect):
             else:                                                        # nlmeans: odd patches, color planes too
                 filters.append("nlmeans=s=%s:p=7:pc=5:r=9:rc=5" % num(max(1.0, min(spatial, 30)), 3))
         return filters
+
+
+@register
+class Deband(ChainEffect):
+    """
+    Deband: removes the visible steps (banding) in smooth gradients such as skies and walls, with FFmpeg's deband
+    filter. For every pixel it looks at four neighbours on a square around it; where the difference to them (or to
+    their average) is smaller than the threshold the pixel counts as banded and is replaced by that average.
+
+    Threshold (%) is for the brightness plane, Chroma threshold (%) for both color planes; 0 leaves that plane alone
+    and both at 0 means no effect. FFmpeg's own default is 2 %. Range is how far (in project pixels) the neighbours
+    may be, Direction (degrees) where they are taken from: a positive value picks a random direction between 0 and
+    that angle for every pixel (360 = anywhere), a negative value uses exactly that angle. Blur compares with the
+    average of the four neighbours instead of with each of them, Coupling changes a pixel only when all of its
+    planes are banded.
+    """
+
+    id = "deband"
+    name = "Deband"
+    category = "detail"
+    params = (Param("threshold", "Threshold (%)", "float", 0, 0, 50, 0.1),
+              Param("chroma_threshold", "Chroma threshold (%)", "float", 0, 0, 50, 0.1),
+              Param("range", "Range (px)", "int", 16, 1, 64, 1),
+              Param("direction", "Direction (degrees)", "float", 360, -360, 360, 1),
+              Param("blur", "Blur", "bool", True),
+              Param("coupling", "Coupling", "bool", False))
+
+    _MIN = 0.00003
+    """Lowest threshold of the filter; at 8 bit it is below one level, so that plane stays as it is."""
+
+    def filters(self, v, ctx):
+        """
+        @param v    checked values (threshold, chroma_threshold, range, direction, blur, coupling)
+        @param ctx  picture the filters run on (the range is given in project pixels)
+        @return     one deband filter, [] when both thresholds are 0
+        """
+        if v["threshold"] <= 0 and v["chroma_threshold"] <= 0:
+            return []
+        luma = max(v["threshold"] / 100, self._MIN)
+        chroma = max(v["chroma_threshold"] / 100, self._MIN)
+        angle = math.trunc(math.radians(v["direction"]) * 1e5) / 1e5     # cut, not rounded: 360 degrees must stay below 2 pi
+        return ["deband=1thr=%s:2thr=%s:3thr=%s:r=%d:d=%s:b=%d:c=%d"
+                % (num(luma, 5), num(chroma, 5), num(chroma, 5), max(1, int(round(ctx.px(v["range"])))),
+                   num(angle, 5), int(v["blur"]), int(v["coupling"]))]
