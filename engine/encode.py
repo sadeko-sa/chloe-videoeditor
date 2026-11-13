@@ -121,13 +121,13 @@ VIDEO: Dict[str, VideoCodec] = {
                        levels=("3.0", "3.1", "4.0", "4.1", "4.2", "5.0", "5.1", "5.2"), deep_profiles=("high10",),
                        two_pass=True),
     "x265": VideoCodec("H.265", "libx265", ("mp4", "mkv"), (0, 51, 25), "-preset", _X26X_SPEEDS, "medium",
-                       tunes=("animation", "grain", "fastdecode", "zerolatency")),
+                       tunes=("animation", "grain", "fastdecode", "zerolatency"), two_pass=True),
     "vp9": VideoCodec("VP9", "libvpx-vp9", ("mkv", "webm"), (0, 63, 31), "-cpu-used",
                       tuple(str(i) for i in range(6)), "2", two_pass=True),
     "svtav1": VideoCodec("AV1 (SVT-AV1)", "libsvtav1", ("mp4", "mkv", "webm"), (0, 63, 32), "-preset",
                          tuple(str(i) for i in range(14)), "8"),
     "aom": VideoCodec("AV1 (libaom)", "libaom-av1", ("mp4", "mkv", "webm"), (0, 63, 32), "-cpu-used",
-                      tuple(str(i) for i in range(9)), "4"),
+                      tuple(str(i) for i in range(9)), "4", two_pass=True),
 }
 
 AUDIO: Dict[str, AudioCodec] = {
