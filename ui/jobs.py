@@ -256,6 +256,10 @@ class JobsWindow(tk.Toplevel):
             self.detail_values[name] = ttk.Label(self.detail_frame, wraplength=DETAIL_WIDTH - 130, justify="left")
             self.detail_values[name].grid(row=row, column=1, sticky="nw", padx=(10, 0), pady=2)
         self.detail_frame.columnconfigure(1, weight=1)
+        self._copied_timer = None
+        for widget in (self.detail_names["error"], self.detail_values["error"]):
+            widget.configure(cursor="hand2")
+            widget.bind("<Button-1>", lambda e: self._copy_error())
 
     # ------------------------------------------------------------------ #
 
@@ -273,6 +277,9 @@ class JobsWindow(tk.Toplevel):
         self.refresh()
 
     def destroy(self):
+        if self._copied_timer:
+            self.after_cancel(self._copied_timer)
+            self._copied_timer = None
         if self._timer:
             self.after_cancel(self._timer)
             self._timer = None
@@ -364,6 +371,19 @@ class JobsWindow(tk.Toplevel):
         self.clipboard_clear()
         commands = job.export.commands(job.out_path, self.app.jobs.threads)
         self.clipboard_append("\n".join(_command_line(args) for args in commands))
+
+    def _copy_error(self):
+        """Click on the error in the details panel: put the error text of the selected job on the clipboard and
+        show "Copied" in place of the label for a moment."""
+        job = self._selected_job()
+        if job is None or not job.error:
+            return
+        self._clip(job.error)
+        label = self.detail_names["error"]
+        label.configure(text=t("detail.copied"))
+        if self._copied_timer:
+            self.after_cancel(self._copied_timer)
+        self._copied_timer = self.after(1500, lambda: label.configure(text=t("detail.error")))
 
     def show_menu(self, job_id, event):
         """

@@ -310,6 +310,7 @@
   "detail.remaining": "残り時間",
   "detail.size": "出力サイズ",
   "detail.error": "エラー",
+  "detail.copied": "コピーしました",
   "job.paused": "一時停止中",
   "btn.job_pause": "一時停止",
   "btn.job_resume": "再開",

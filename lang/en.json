@@ -310,6 +310,7 @@
   "detail.remaining": "Remaining",
   "detail.size": "Output size",
   "detail.error": "Error",
+  "detail.copied": "Copied",
   "job.paused": "Paused",
   "btn.job_pause": "Pause",
   "btn.job_resume": "Resume",
