@@ -122,8 +122,8 @@ class Grain(ChainEffect):
 _DENOISE_METHODS = ("hqdn3d", "fftdnoiz", "nlmeans")
 """Denoise methods, fast to slow: hqdn3d (fast), fftdnoiz (good), nlmeans (best, about 3 times slower)."""
 
-_DENOISE_STRENGTHS = ("off", "ultralight", "light", "medium", "strong")
-"""Strength presets, like the ones of HandBrake. "off" leaves the picture alone."""
+_DENOISE_STRENGTHS = ("ultralight", "light", "medium", "strong")
+"""Strength presets, like the ones of HandBrake."""
 
 _DENOISE_LADDER = {
     #               strength:     (spatial, temporal)
@@ -176,7 +176,7 @@ class Denoise(ChainEffect):
     name = "Denoise"
     category = "detail"
     params = (Param("method", "Method", "choice", "hqdn3d", choices=_DENOISE_METHODS),
-              Param("strength", "Strength", "choice", "off", choices=_DENOISE_STRENGTHS),
+              Param("strength", "Strength", "choice", "light", choices=_DENOISE_STRENGTHS),
               Param("spatial_adj", "Spatial (%)", "float", 0, -100, 100, 1),
               Param("temporal_adj", "Temporal (%)", "float", 0, -100, 100, 1))
 
@@ -187,6 +187,8 @@ class Denoise(ChainEffect):
                        percentages set so that the filter stays exactly the same as the old slider made it
         """
         values = dict(values or {})
+        if values.get("strength") == "off":                              # projects from before: no "off" preset
+            values.update(strength="light", spatial_adj=-100, temporal_adj=-100)
         old = values.get("amount")
         if ("strength" not in values and isinstance(old, (int, float)) and not isinstance(old, bool)
                 and old == old and old > 0):
@@ -207,11 +209,9 @@ class Denoise(ChainEffect):
         @param v    checked values (method, strength, spatial, temporal)
         @param ctx  picture the filters run on
         @return     the filters of the chosen method (temporal hqdn3d first, then the spatial filter),
-                    [] when the strength is off or both parts are 0
+                    [] when both parts are 0
         """
-        step = _DENOISE_LADDER[v["method"]].get(v["strength"])
-        if not step:
-            return []
+        step = _DENOISE_LADDER[v["method"]][v["strength"]]
         spatial = step[0] * (100 + v["spatial_adj"]) / 100
         temporal = step[1] * (100 + v["temporal_adj"]) / 100
         if v["method"] == "hqdn3d":

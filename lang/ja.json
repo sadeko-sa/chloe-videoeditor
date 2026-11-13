@@ -179,7 +179,6 @@
   "choice.denoise.method.hqdn3d": "高速 (hqdn3d)",
   "choice.denoise.method.fftdnoiz": "良好 (fftdnoiz)",
   "choice.denoise.method.nlmeans": "最高 (nlmeans)",
-  "choice.denoise.strength.off": "オフ",
   "choice.denoise.strength.ultralight": "極弱",
   "choice.denoise.strength.light": "弱",
   "choice.denoise.strength.medium": "中",

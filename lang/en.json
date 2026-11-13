@@ -179,7 +179,6 @@
   "choice.denoise.method.hqdn3d": "Fast (hqdn3d)",
   "choice.denoise.method.fftdnoiz": "Good (fftdnoiz)",
   "choice.denoise.method.nlmeans": "Best (nlmeans)",
-  "choice.denoise.strength.off": "Off",
   "choice.denoise.strength.ultralight": "Ultralight",
   "choice.denoise.strength.light": "Light",
   "choice.denoise.strength.medium": "Medium",
