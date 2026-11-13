@@ -374,7 +374,10 @@ class Export:
         if not o.two_pass:
             return [final + length + [target]]
         log = ["-passlogfile", self._pass_log(target)]
-        return [head + video + extra + ["-pass", "1"] + log + ["-an"] + length + ["-f", "null", "-"],
+        # The first pass writes no sound, but the audio output of the filter graph must still be connected
+        # (else FFmpeg stops with "Filter ... has output 0 unconnected"): map it and drop it into the null muxer.
+        sink = ["-map", "[%s]" % job.audio, "-c:a", "pcm_s16le"] if job.audio else ["-an"]
+        return [head + video + extra + ["-pass", "1"] + log + sink + length + ["-f", "null", "-"],
                 final + ["-pass", "2"] + log + length + [target]]
 
     @staticmethod
