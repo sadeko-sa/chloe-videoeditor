@@ -192,7 +192,7 @@ def _adjust(g: _Graph, current: str, layer: Layer, steps: Sequence[_Step], ctx: 
 
 
 def _canvas(width: int, height: int, fps: str, seconds: float) -> List[str]:
-    return ["color=c=black:s=%dx%d:r=%s:d=%s" % (width, height, fps, num(seconds, 6)), "format=yuv420p"]
+    return ["color=c=black:s=%dx%d:r=%s:d=%s" % (width, height, fps, num(seconds, 6)), "format=yuv420p10le"]
 
 
 # --------------------------------------------------------------------------- #
@@ -253,7 +253,7 @@ def compile_export(project: Project) -> Job:
                 window = "gte(t,%s)" % begin if layer.start > 0 else None
             current = _adjust(g, current, layer, steps, ctx, window)
     job.tags = color_tags(height)
-    job.video = g.chain([current], ["format=yuv420p", "setparams=" + job.tags])
+    job.video = g.chain([current], ["format=yuv420p10le", "setparams=" + job.tags])
     if len(sounds) == 1:
         job.audio = sounds[0]
     elif sounds:
