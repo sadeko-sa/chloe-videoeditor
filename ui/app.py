@@ -1202,7 +1202,7 @@ class App:
         self.refresh_inspector()
         self.update_title()
         self.update_time_range()
-        self.set_time(0.0)
+        self.set_time(project.sel_time)      # snapped and clamped there: media may be shorter now, 0 for a file without one
 
     @staticmethod
     def _saved_selection(project):
@@ -1329,6 +1329,7 @@ class App:
         # the selection goes into the file only; it is no change of the project (no undo step, no unsaved mark)
         project.sel_layer, project.sel_effects, project.sel_active = (self.sel_layer, self.effect_sel.ordered(),
                                                                        self.effect_sel.active)
+        project.sel_time = self.t        # the frame too: the window jumps back to it on open
         try:
             save_project(project, path)
         except OSError as exc:

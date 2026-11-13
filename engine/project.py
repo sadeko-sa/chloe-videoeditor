@@ -213,6 +213,7 @@ class Project:
     @param sel_layer    id of the layer the window had selected when the project was saved, None = none saved
     @param sel_effects  indices of the selected effects of that layer (Layer.effects)
     @param sel_active   the active one of the selected effects, None = none saved
+    @param sel_time     timeline second of the frame the window showed when the project was saved, 0 = none saved
 
     The selection is not part of the edit: to_dict() (the undo steps) leaves it out, so selecting something is
     no change and no undo step. Only to_file_dict() (the project file) holds it; the window fills these fields
@@ -225,6 +226,7 @@ class Project:
     sel_layer: Optional[str] = field(default=None, compare=False)
     sel_effects: List[int] = field(default_factory=list, compare=False)
     sel_active: Optional[int] = field(default=None, compare=False)
+    sel_time: float = field(default=0.0, compare=False)
 
     def duration(self) -> float:
         """@return the end of the last media layer in seconds (0 if there is no media)"""
@@ -269,7 +271,8 @@ class Project:
     def to_file_dict(self) -> Dict[str, Any]:
         """@return to_dict() plus the selection (layer and effects); this is what a project file holds"""
         data = self.to_dict()
-        data["selection"] = {"layer": self.sel_layer, "effects": sorted(self.sel_effects), "active": self.sel_active}
+        data["selection"] = {"layer": self.sel_layer, "effects": sorted(self.sel_effects), "active": self.sel_active,
+                             "time": self.sel_time}
         return data
 
     def _load_selection(self, data: Any) -> None:
@@ -279,6 +282,7 @@ class Project:
         """
         if not isinstance(data, dict):
             return
+        self.sel_time = _number(data.get("time"), 0.0, 0.0, 1e6)      # independent of the layer: kept even if that is gone
         layer = data.get("layer")
         if not isinstance(layer, str) or self.find(layer) is None:
             return
