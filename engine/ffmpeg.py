@@ -351,7 +351,8 @@ class Export:
         job, o = self.job, self.options
         graph, picture = job.graph, job.video
         if o.height:
-            graph += ";[%s]scale=-2:%d:flags=lanczos,setsar=1[%s]" % (picture, o.height, _SCALED)
+            graph += ";[%s]scale=-2:%d:flags=lanczos,setsar=1%s[%s]" % (
+                picture, o.height, ",setparams=" + job.tags if job.tags else "", _SCALED)
             picture = _SCALED
         limit = ["-threads:v", str(threads)] if threads > 0 else []
         head = _base(self.tools) + ["-progress", "pipe:1", "-nostats"]
@@ -366,6 +367,10 @@ class Export:
             head += job.audio_source                    # the same file once more, only for its audio stream
         head += ["-filter_complex", graph, "-map", "[%s]" % picture]
         video, extra, length = o.video_args(threads), o.extra_args(), ["-t", "%.6f" % job.duration]
+        if job.tags:                                    # same tags again as options (older FFmpeg reads these)
+            tag = dict(item.split("=") for item in job.tags.split(":"))
+            video += ["-colorspace", tag["colorspace"], "-color_primaries", tag["color_primaries"],
+                      "-color_trc", tag["color_trc"], "-color_range", "tv"]
         if copy:
             audio = ["-map", "%d:a:0" % len(job.inputs)] + o.audio_args(True)
         else:

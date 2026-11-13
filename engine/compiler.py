@@ -48,6 +48,7 @@ class Job:
     audio_source: Optional[List[str]] = None
     prefix: Optional[str] = None
     duration: float = 0.0
+    tags: str = ""          # colour tags of the finished picture, "colorspace=..:color_primaries=..:color_trc=..:range=tv"
 
     def input_args(self) -> List[str]:
         """@return the arguments of all inputs in one list"""
@@ -89,6 +90,15 @@ def fps_text(fps: float) -> str:
     """@return the frame rate as an exact fraction for FFmpeg (29.97 -> 30000/1001)"""
     frac = Fraction(fps).limit_denominator(1001)
     return str(frac.numerator) if frac.denominator == 1 else "%d/%d" % (frac.numerator, frac.denominator)
+
+
+def color_tags(height: int) -> str:
+    """
+    @return setparams options that label the finished picture with its matrix, primaries and transfer.
+            Without them FFmpeg 7.1+ writes only the matrix and players guess the rest (brighter/darker than a browser).
+    """
+    name = "bt709" if color_matrix(height) == "bt709" else "smpte170m"
+    return "colorspace=%s:color_primaries=%s:color_trc=%s:range=tv" % (name, name, name)
 
 
 def color_matrix(height: int) -> str:
@@ -242,7 +252,8 @@ def compile_export(project: Project) -> Job:
             else:
                 window = "gte(t,%s)" % begin if layer.start > 0 else None
             current = _adjust(g, current, layer, steps, ctx, window)
-    job.video = g.chain([current], ["format=yuv420p"])
+    job.tags = color_tags(height)
+    job.video = g.chain([current], ["format=yuv420p", "setparams=" + job.tags])
     if len(sounds) == 1:
         job.audio = sounds[0]
     elif sounds:
