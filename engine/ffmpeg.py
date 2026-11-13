@@ -20,6 +20,7 @@ from typing import Callable, Dict, FrozenSet, List, Optional, Tuple
 from .compiler import Job
 from .encode import COPY_AUDIO, VIDEO, ExportOptions, depth_of
 from .project import IMAGE_EXTS, IMAGE_SECONDS, MediaInfo
+from .stamp import stamp
 
 IS_WIN = os.name == "nt"
 IS_MAC = sys.platform == "darwin"
@@ -407,6 +408,7 @@ class Export:
                 if error or self._cancelled:
                     break
             else:
+                stamp(target)                   # writing application: this program instead of FFmpeg; a failure leaves the file as it is
                 os.replace(target, self.out_path)
         except OSError as exc:
             error = str(exc)
