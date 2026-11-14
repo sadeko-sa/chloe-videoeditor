@@ -55,6 +55,30 @@ def test_preset_is_the_base_and_options_win():
     assert (o.height, o.crf) == (720, 18)
 
 
+def _saved(line, saved, out="out.mp4"):
+    args = cli.build_parser("cvecli.py").parse_args(line.split())
+    return cli.export_options(args, FAKE, out, None, saved)
+
+
+def test_project_options_are_the_base_preset_and_options_win():
+    saved = enc.ExportOptions(crf=30, video="x265", container="mkv").to_dict()
+    assert (_saved("", saved, "a.mkv").video, _saved("", saved, "a.mkv").crf) == ("x265", 30)
+    assert _saved("-q 18", saved, "a.mkv").crf == 18                      # the command line wins over the project
+    assert _saved("-Z phone_720", saved, "a.mp4").crf != 30               # a preset replaces the project options
+
+
+def test_project_keeps_its_export_options(tmp_path):
+    from engine.project import Project, load_project, save_project
+    project = Project()
+    path = str(tmp_path / "p.cvproj")
+    save_project(project, path)
+    assert "export" not in json.load(open(path)) and load_project(path).export == {}      # old files stay as they were
+    project.export = enc.ExportOptions(crf=19).to_dict()
+    save_project(project, path)
+    assert load_project(path).export["crf"] == 19 and cli.project_export(path)["crf"] == 19
+    assert cli.project_export(str(tmp_path / "clip.mp4")) is None
+
+
 @pytest.mark.parametrize("line, out", [
     ("-e x264", "a.webm"),                   # the container cannot hold it
     ("--tune nonsense", "a.mp4"),

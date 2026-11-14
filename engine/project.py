@@ -214,10 +214,12 @@ class Project:
     @param sel_effects  indices of the selected effects of that layer (Layer.effects)
     @param sel_active   the active one of the selected effects, None = none saved
     @param sel_time     timeline second of the frame the window showed when the project was saved, 0 = none saved
+    @param export       export options last used for this project (ExportOptions.to_dict()), {} = none saved
 
-    The selection is not part of the edit: to_dict() (the undo steps) leaves it out, so selecting something is
-    no change and no undo step. Only to_file_dict() (the project file) holds it; the window fills these fields
-    before saving and reads them after loading.
+    The selection and the export options are not part of the edit: to_dict() (the undo steps) leaves them out, so
+    they are no change and no undo step. Only to_file_dict() (the project file) holds them; the window fills these
+    fields before saving and reads them after loading. cvecli.py uses the export options when no preset or option
+    asks for something else.
     """
     width: int = 1280
     height: int = 720
@@ -227,6 +229,7 @@ class Project:
     sel_effects: List[int] = field(default_factory=list, compare=False)
     sel_active: Optional[int] = field(default=None, compare=False)
     sel_time: float = field(default=0.0, compare=False)
+    export: Dict[str, Any] = field(default_factory=dict, compare=False)
 
     def duration(self) -> float:
         """@return the end of the last media layer in seconds (0 if there is no media)"""
@@ -273,6 +276,8 @@ class Project:
         data = self.to_dict()
         data["selection"] = {"layer": self.sel_layer, "effects": sorted(self.sel_effects), "active": self.sel_active,
                              "time": self.sel_time}
+        if self.export:
+            data["export"] = dict(self.export)
         return data
 
     def _load_selection(self, data: Any) -> None:
@@ -308,6 +313,8 @@ class Project:
             elif item.get("kind") == "adjustment":
                 project.layers.append(AdjustmentLayer.from_dict(item))
         project._load_selection(data.get("selection"))
+        if isinstance(data.get("export"), dict):
+            project.export = dict(data["export"])
         return project
 
 

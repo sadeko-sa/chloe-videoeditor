@@ -163,12 +163,28 @@ def load_input(tools: ff.Tools, path: str) -> Project:
     return project
 
 
-def export_options(args: argparse.Namespace, tools: ff.Tools, out_path: str,
-                   notes: Optional[List[str]] = None) -> enc.ExportOptions:
+def project_export(path: str) -> Optional[Dict[str, Any]]:
     """
-    The export settings: the preset (or the defaults) with what the command line sets on top. Every value is checked
-    against this FFmpeg, and a value the user asked for that cannot be used is an error, not silently another one.
+    @param path  input file of the command line
+    @return      the export options saved in this project file, or None for anything else (not a project, no options,
+                 unreadable: load_input() reports the last one)
+    """
+    if not path.lower().endswith(PROJECT_EXT) or not os.path.isfile(path):
+        return None
+    try:
+        return load_project(path).export or None
+    except ProjectError:
+        return None
 
+
+def export_options(args: argparse.Namespace, tools: ff.Tools, out_path: str,
+                   notes: Optional[List[str]] = None, saved: Optional[Dict[str, Any]] = None) -> enc.ExportOptions:
+    """
+    The export settings, lowest to highest: the defaults, the options saved in the project, the preset (-Z), what the
+    command line sets. Every value is checked against this FFmpeg, and a value the user asked for that cannot be used
+    is an error, not silently another one.
+
+    @param saved  export options of the project file (project_export()), None = none
     @param notes  gets one line for each value the user did NOT ask for that had to change to fit what they asked for
                   (for example the video encoder when -f webm is not met by x264)
     @raise CliError for an unknown preset, a requested value that is not usable, or an output name that does not fit
@@ -180,7 +196,7 @@ def export_options(args: argparse.Namespace, tools: ff.Tools, out_path: str,
         asked["rate"] = enc.RATE_QUALITY
     if "container" not in asked and _container_of(out_path):
         asked["container"] = _container_of(out_path)
-    base = enc.ExportOptions()
+    base = enc.ExportOptions.from_dict(saved, tools.encoders, tools.depths) if saved else enc.ExportOptions()
     if args.preset:
         presets = enc.available_presets(tools.encoders, tools.depths)
         if args.preset not in presets:
@@ -449,7 +465,10 @@ def render(args: argparse.Namespace, tools: ff.Tools, report: Reporter) -> int:
     @raise CliError for everything the user can fix
     """
     notes: List[str] = []
-    options = export_options(args, tools, args.output, notes)       # before the (slower) probe of the input
+    saved = project_export(args.input)
+    if saved and not args.preset:
+        notes.append("export settings taken from the project file")
+    options = export_options(args, tools, args.output, notes, saved)       # before the (slower) probe of the input
     for note in notes:
         report.note(note)
     project = load_input(tools, args.input)

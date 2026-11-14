@@ -69,13 +69,15 @@ def _tip(key, *widgets):
 class ExportDialog(Dialog):
     """
     Pick the export options and the file; Queue / Start put the export into the queue (result "add" / "start").
-    The options are kept in the config for the next time.
+    The options are kept in the config for the next time and in the project (written with the next save).
+    "Save settings" keeps them in the project without exporting.
     """
 
     def __init__(self, app):
         super().__init__(app.root, "dlg.export")
         self.app, self.encoders, self.depths = app, app.tools.encoders, app.tools.depths
-        self.last = enc.ExportOptions.from_dict(app.cfg["export"], self.encoders, self.depths)
+        # the options of this project if it has some, else the ones used last in any project
+        self.last = enc.ExportOptions.from_dict(app.project.export or app.cfg["export"], self.encoders, self.depths)
         self.presets = enc.available_presets(self.encoders, self.depths)
         frm = ttk.Frame(self, padding=14)
         frm.pack(fill="both", expand=True)
@@ -109,7 +111,7 @@ class ExportDialog(Dialog):
                               fps=fmt_number(project.fps, 3), seconds=fmt_number(project.duration(), 2))).grid(
             row=4, column=0, columnspan=3, sticky="w", pady=(8, 0))
         buttons_row(frm, ("btn.queue", lambda: self._ok("add")), ("btn.start", lambda: self._ok("start")),
-                    ("btn.cancel", self.destroy)).grid(row=5, column=0, columnspan=3, sticky="we", pady=(12, 0))
+                    ("btn.save_settings", self._save_settings), ("btn.cancel", self.destroy)).grid(row=5, column=0, columnspan=3, sticky="we", pady=(12, 0))
 
         self.container.set_items([(c, enc.CONTAINERS[c].label) for c in enc.containers(self.encoders)])
         self.preset.set_items([("last", t("export.preset_last"))] +
@@ -338,6 +340,28 @@ class ExportDialog(Dialog):
         if path:
             self.path_var.set(path)
 
+    def _remember(self, options):
+        """Keep the options in the project (a change the project file gets with the next save) and in the config."""
+        app, saved = self.app, options.to_dict()
+        if app.project.export != saved:
+            app.project.export = saved
+            app.saved_state = None              # unsaved: the window asks to save before it closes
+            app.update_title()
+        app.cfg.update(export=saved)
+        app.save_config()
+
+    def _save_settings(self):
+        """Keep the options in the project without exporting anything."""
+        options = self._collect()
+        try:
+            options.extra_args()
+        except ValueError:
+            messagebox.showerror(t("dlg.error"), t("msg.extra_invalid"), parent=self)
+            return
+        self._remember(options)
+        self.app._say(t("status.settings_saved"))
+        self.destroy()
+
     def _ok(self, action):
         """
         Compile the project as it is now and queue the export.
@@ -369,7 +393,8 @@ class ExportDialog(Dialog):
         except QueueError:
             messagebox.showerror(t("dlg.error"), t("msg.job_duplicate", name=os.path.basename(path)), parent=self)
             return
-        app.cfg.update(export=options.to_dict(), last_dir=os.path.dirname(path))
+        self._remember(options)
+        app.cfg.update(last_dir=os.path.dirname(path))
         app.save_config()
         self.result, self.queued_name = action, os.path.basename(path)
         self.destroy()
