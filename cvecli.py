@@ -15,13 +15,15 @@ so `python chloe_videoeditor.py -i a.mp4 -o b.mp4` does the same. Exit code: 0 d
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shlex
 import signal
 import subprocess
 import sys
+import time
 from dataclasses import fields, replace
-from typing import Any, Dict, Iterable, List, Optional, Sequence, TextIO
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, TextIO
 
 from engine import APP_NAME, VERSION, effect
 from engine import encode as enc
@@ -109,6 +111,8 @@ def build_parser(prog: Optional[str] = None) -> argparse.ArgumentParser:
     run.add_argument("--ffmpeg", metavar="PATH", help="FFmpeg file or folder (default: the setting of the window, then search)")
     run.add_argument("--dry-run", action="store_true", help="print the FFmpeg command(s) and exit")
     run.add_argument("--quiet", action="store_true", help="print nothing but errors")
+    run.add_argument("--json", action="store_true",
+                     help="for other programs: one JSON event per line on stdout (see JsonReporter in this file)")
     parser.add_argument("--version", action="version", version="%s %s" % (APP_NAME, VERSION))
     return parser
 
@@ -208,30 +212,225 @@ def command_text(args: Sequence[str]) -> str:
     return subprocess.list2cmdline(list(args)) if ff.IS_WIN else shlex.join(args)
 
 
-class Progress:
+# --------------------------------------------------------------------------- #
+# Reports: what the user, or a front end that runs this program, is told
+# --------------------------------------------------------------------------- #
+
+
+def _clock_text(seconds: float) -> str:
+    """@return seconds as m:ss, or h:mm:ss from one hour on"""
+    minutes, secs = divmod(int(round(seconds)), 60)
+    hours, minutes = divmod(minutes, 60)
+    return "%d:%02d:%02d" % (hours, minutes, secs) if hours else "%d:%02d" % (minutes, secs)
+
+
+class Reporter:
     """
-    Progress for Export(on_progress=...): a percent that counts up on one line when the output is a terminal,
-    a line at every 10 % when it is a pipe or a file (so logs stay short).
+    Base of the two ways to report (TextReporter for people, JsonReporter for other programs). It does the counting
+    that both need; a subclass only decides how each message looks.
+
+    The events, in the order they come: note (any number), start, progress (any number), then exactly one of
+    done, stopped or error. Dry runs and the preset list send `commands` and `presets` instead.
+
+    Progress numbers (from progress(), see stats()): percent 0..100, elapsed seconds, eta seconds (None until 1 %
+    is done), speed (seconds of result made per second of work, None at the very start). A two-pass export counts
+    both passes, so its speed is half of what FFmpeg shows and the eta stays right.
     """
 
-    def __init__(self, stream: Optional[TextIO] = None):
+    interval = 0.5
+    """Least seconds between two progress messages (the first one always goes through)."""
+
+    def __init__(self, clock: Callable[[], float] = time.monotonic):
+        self._clock = clock
+        self._began = clock()
+        self._duration = 0.0
+        self._last: Optional[float] = None
+
+    def stats(self, fraction: float) -> Dict[str, Any]:
+        """@param fraction  0..1 of the whole export @return percent, elapsed, eta and speed as the class text says"""
+        fraction = max(0.0, min(fraction, 1.0))
+        elapsed = self._clock() - self._began
+        eta = elapsed * (1 - fraction) / fraction if fraction >= 0.01 else None
+        speed = fraction * self._duration / elapsed if fraction > 0 and elapsed > 0 else None
+        return {"percent": round(fraction * 100, 1), "elapsed": round(elapsed, 1),
+                "eta": None if eta is None else round(eta, 1), "speed": None if speed is None else round(speed, 2)}
+
+    def start(self, source: str, target: str, summary: str, duration: float) -> None:
+        """The export begins. @param duration  seconds of the result"""
+        self._began, self._duration, self._last = self._clock(), duration, None
+        self._start(source, target, summary, duration)
+
+    def progress(self, fraction: float) -> None:
+        """Export(on_progress=...): passes on at most one message per `interval`."""
+        now = self._clock()
+        if self._last is None or now - self._last >= self.interval:
+            self._last = now
+            self._progress(self.stats(fraction))
+
+    def done(self, target: str, size: int) -> None:
+        """The file is complete. @param size  bytes"""
+        self._done(target, size, self.stats(1.0))
+
+    def note(self, text: str, level: str = "note") -> None:
+        """@param level  "note" (something was changed for the user) or "warning" """
+
+    def stopped(self) -> None:
+        """The export was stopped (Ctrl+C or termination); the output file was not written."""
+
+    def error(self, text: str) -> None:
+        """Nothing was written because of this."""
+
+    def commands(self, commands: Sequence[Sequence[str]]) -> None:
+        """--dry-run: the FFmpeg command(s). Always sent, also with --quiet."""
+
+    def presets(self, presets: Dict[str, str]) -> None:
+        """--list-presets: {key: summary}. Always sent, also with --quiet."""
+
+    def _start(self, source: str, target: str, summary: str, duration: float) -> None: ...
+
+    def _progress(self, stats: Dict[str, Any]) -> None: ...
+
+    def _done(self, target: str, size: int, stats: Dict[str, Any]) -> None: ...
+
+
+class TextReporter(Reporter):
+    """
+    Messages on stderr. On a terminal one line is redrawn in place:
+
+        Encoding  42%  1.8x  elapsed 0:12  ETA 0:17
+
+    to a pipe or file it is one line at every 10 %, so logs stay short. quiet = errors only. Results that are the
+    point of the call (commands, presets) go to stdout.
+    """
+
+    def __init__(self, quiet: bool = False, stream: Optional[TextIO] = None, clock: Callable[[], float] = time.monotonic):
+        super().__init__(clock)
         self._out = stream or sys.stderr
+        self._quiet = quiet
         self._tty = self._out.isatty()
-        self._shown = -1
+        self.interval = Reporter.interval if self._tty else 0.0
+        self._shown = -1                    # percent (tty) or tenth (pipe) last written
+        self._open = False                  # a redrawn line is on screen and not ended yet
+        self._width = 0
 
-    def __call__(self, fraction: float) -> None:
-        percent = int(max(0.0, min(fraction, 1.0)) * 100)
-        step = percent if self._tty else percent // 10 * 10
-        if step != self._shown:
-            self._shown = step
-            self._out.write("\rEncoding %3d%%" % step if self._tty else "Encoding %d%%\n" % step)
-            self._out.flush()
+    def _line(self, text: str) -> None:
+        self._end_line()
+        self._out.write(text + "\n")
+        self._out.flush()
 
-    def close(self) -> None:
-        """End the line of the terminal version."""
-        if self._tty and self._shown >= 0:
+    def _end_line(self) -> None:
+        if self._open:
             self._out.write("\n")
-            self._out.flush()
+            self._open = False
+
+    def _draw(self, stats: Dict[str, Any]) -> None:
+        percent = int(stats["percent"])
+        step = percent if self._tty else percent // 10 * 10
+        if step == self._shown and not self._tty:
+            return
+        self._shown = step
+        parts = ["Encoding %3d%%" % percent]
+        if stats["speed"] is not None:
+            parts.append("%.1fx" % stats["speed"])
+        parts.append("elapsed " + _clock_text(stats["elapsed"]))
+        if stats["eta"] is not None:
+            parts.append("ETA " + _clock_text(stats["eta"]))
+        text = "  ".join(parts)
+        if self._tty:
+            self._width = max(self._width, len(text))
+            self._out.write("\r" + text.ljust(self._width))
+            self._open = True
+        else:
+            self._out.write(text + "\n")
+        self._out.flush()
+
+    def note(self, text: str, level: str = "note") -> None:
+        if not self._quiet:
+            self._line("%s: %s" % (level, text))
+
+    def _start(self, source: str, target: str, summary: str, duration: float) -> None:
+        if not self._quiet:
+            self._line("%s -> %s (%s)" % (os.path.basename(source), target, summary))
+
+    def _progress(self, stats: Dict[str, Any]) -> None:
+        if not self._quiet:
+            self._draw(stats)
+
+    def _done(self, target: str, size: int, stats: Dict[str, Any]) -> None:
+        if not self._quiet:
+            self._draw(stats)
+            self._line("done: %s (%.1f MB) in %s" % (target, size / 1e6, _clock_text(stats["elapsed"])))
+
+    def stopped(self) -> None:
+        if not self._quiet:
+            self._line("stopped")
+
+    def error(self, text: str) -> None:
+        self._line("error: " + text)
+
+    def commands(self, commands: Sequence[Sequence[str]]) -> None:
+        for command in commands:
+            print(command_text(command))
+
+    def presets(self, presets: Dict[str, str]) -> None:
+        for key, summary in presets.items():
+            print("%-12s %s" % (key, summary))
+
+
+class JsonReporter(Reporter):
+    """
+    For programs that run this one (--json): one JSON object per line on stdout, flushed at once, and nothing else on
+    stdout or stderr (a wrong command line still ends with the usage text and exit code 2, before any event).
+    Every object has "event"; the other keys are:
+
+        note      level ("note" | "warning"), text
+        start     source, target, summary, duration (seconds of the result)
+        progress  percent, elapsed, eta, speed (see Reporter; eta and speed can be null)
+        done      target, bytes, percent (100), elapsed
+        stopped
+        error     text
+        commands  commands: [[arg, ...], ...]
+        presets   presets: {key: summary}
+
+    The exit code says the same as the last event: 0 done (or commands / presets), 1 error, 130 stopped.
+    """
+
+    def __init__(self, stream: Optional[TextIO] = None, clock: Callable[[], float] = time.monotonic):
+        super().__init__(clock)
+        self._out = stream or sys.stdout
+
+    def _emit(self, event: str, **data: Any) -> None:
+        self._out.write(json.dumps(dict(event=event, **data), ensure_ascii=False) + "\n")
+        self._out.flush()
+
+    def note(self, text: str, level: str = "note") -> None:
+        self._emit("note", level=level, text=text)
+
+    def _start(self, source: str, target: str, summary: str, duration: float) -> None:
+        self._emit("start", source=source, target=target, summary=summary, duration=round(duration, 3))
+
+    def _progress(self, stats: Dict[str, Any]) -> None:
+        self._emit("progress", **stats)
+
+    def _done(self, target: str, size: int, stats: Dict[str, Any]) -> None:
+        self._emit("done", target=target, bytes=size, percent=stats["percent"], elapsed=stats["elapsed"])
+
+    def stopped(self) -> None:
+        self._emit("stopped")
+
+    def error(self, text: str) -> None:
+        self._emit("error", text=text)
+
+    def commands(self, commands: Sequence[Sequence[str]]) -> None:
+        self._emit("commands", commands=[list(c) for c in commands])
+
+    def presets(self, presets: Dict[str, str]) -> None:
+        self._emit("presets", presets=presets)
+
+
+# --------------------------------------------------------------------------- #
+# Running
+# --------------------------------------------------------------------------- #
 
 
 def _stop_on_signal(export: ff.Export) -> None:
@@ -242,18 +441,17 @@ def _stop_on_signal(export: ff.Export) -> None:
             signal.signal(number, lambda _number, _frame: export.cancel())
 
 
-def render(args: argparse.Namespace, tools: ff.Tools, say) -> int:
+def render(args: argparse.Namespace, tools: ff.Tools, report: Reporter) -> int:
     """
     Load the input, work out the settings and run the export.
 
-    @param say  prints a message line to stderr (does nothing with --quiet)
-    @return     exit code
+    @return  exit code
     @raise CliError for everything the user can fix
     """
     notes: List[str] = []
     options = export_options(args, tools, args.output, notes)       # before the (slower) probe of the input
     for note in notes:
-        say("note: " + note)
+        report.note(note)
     project = load_input(tools, args.input)
     if any(_same_file(args.output, layer.path) for layer in project.media_layers()) or _same_file(args.output, args.input):
         raise CliError("the output would replace an input file: %s" % args.output)
@@ -265,25 +463,19 @@ def render(args: argparse.Namespace, tools: ff.Tools, say) -> int:
         raise CliError(str(exc))
     if options.audio == enc.COPY_AUDIO and not job.audio_source:
         raise CliError("-E copy needs exactly one clip with sound that is not changed")
-    progress = None if args.quiet else Progress()
-    export = ff.Export(tools, job, options, args.output, progress)
+    export = ff.Export(tools, job, options, args.output, report.progress)
     if args.dry_run:
-        for command in export.commands(args.output, args.threads):
-            print(command_text(command))
+        report.commands(export.commands(args.output, args.threads))
         return EXIT_OK
-    say("%s -> %s (%s)" % (os.path.basename(args.input), args.output, options.summary()))
+    report.start(args.input, args.output, options.summary(), job.duration)
     _stop_on_signal(export)
     error = export.run(args.threads)
-    if progress:
-        if not error and not export.cancelled:
-            progress(1.0)
-        progress.close()
     if export.cancelled:
-        say("stopped")
+        report.stopped()
         return EXIT_STOPPED
     if error:
         raise CliError(error)
-    say("done: %s (%.1f MB)" % (args.output, os.path.getsize(args.output) / 1e6))
+    report.done(args.output, os.path.getsize(args.output))
     return EXIT_OK
 
 
@@ -296,11 +488,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parser.parse_args(argv)
     if not args.list_presets and not (args.input and args.output):
         parser.error("-i / --input and -o / --output are required")
-
-    def say(text: str) -> None:
-        if not args.quiet:
-            print(text, file=sys.stderr)
-
+    report = JsonReporter() if args.json else TextReporter(args.quiet)
     try:
         cfg = load_config()
         effect.discover()
@@ -308,14 +496,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if tools is None:
             raise CliError("FFmpeg not found: put it on PATH or use --ffmpeg")
         if ff.too_old(tools):
-            say("warning: FFmpeg %s is older than %d.%d, some effects may fail" % ((tools.version,) + ff.MIN_VERSION))
+            report.note("FFmpeg %s is older than %d.%d, some effects may fail" % ((tools.version,) + ff.MIN_VERSION),
+                        "warning")
         if args.list_presets:
-            for key, options in enc.available_presets(tools.encoders, tools.depths).items():
-                print("%-12s %s" % (key, options.summary()))
+            report.presets({k: o.summary() for k, o in enc.available_presets(tools.encoders, tools.depths).items()})
             return EXIT_OK
-        return render(args, tools, say)
+        return render(args, tools, report)
     except CliError as exc:
-        print("error: %s" % exc, file=sys.stderr)
+        report.error(str(exc))
         return EXIT_FAILED
 
 

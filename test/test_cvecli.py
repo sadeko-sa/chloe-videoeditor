@@ -1,5 +1,7 @@
 """Tests of the command line version: reading the options (no FFmpeg needed) and a real export (needs FFmpeg)."""
 
+import io
+import json
 import os
 import subprocess
 import sys
@@ -85,6 +87,87 @@ def test_quality_and_bitrate_exclude_each_other(capsys):
 
 
 # --------------------------------------------------------------------------- #
+# Reports
+# --------------------------------------------------------------------------- #
+
+
+class Clock:
+    """A clock the test moves by hand."""
+
+    def __init__(self):
+        self.now = 100.0
+
+    def __call__(self):
+        return self.now
+
+
+def test_progress_numbers():
+    clock = Clock()
+    report = cli.JsonReporter(io.StringIO(), clock)
+    report.start("a.mp4", "b.mp4", "summary", 60.0)
+    assert report.stats(0.0)["eta"] is None and report.stats(0.0)["speed"] is None
+    clock.now += 10
+    s = report.stats(0.25)                      # 15 s of result in 10 s of work, three quarters to go
+    assert (s["percent"], s["elapsed"], s["speed"], s["eta"]) == (25.0, 10.0, 1.5, 30.0)
+    assert report.stats(5.0)["percent"] == 100.0 and report.stats(-1)["percent"] == 0.0
+
+
+def test_progress_is_throttled():
+    clock, out = Clock(), io.StringIO()
+    report = cli.JsonReporter(out, clock)
+    report.start("a", "b", "s", 10.0)
+    for step in range(10):                      # ten calls within one interval
+        report.progress(step / 10)
+        clock.now += 0.01
+    clock.now += 1
+    report.progress(0.9)
+    assert [json.loads(l)["percent"] for l in out.getvalue().splitlines()[1:]] == [0.0, 90.0]
+
+
+def test_json_events_are_one_object_per_line():
+    out = io.StringIO()
+    report = cli.JsonReporter(out, Clock())
+    report.note("changed", "warning")
+    report.start("a.mp4", "b.mp4", "MP4", 3.0)
+    report.progress(0.5)
+    report.done("b.mp4", 1234)
+    report.error("bad")
+    events = [json.loads(l) for l in out.getvalue().splitlines()]
+    assert [e["event"] for e in events] == ["note", "start", "progress", "done", "error"]
+    assert events[0] == {"event": "note", "level": "warning", "text": "changed"}
+    assert events[3]["bytes"] == 1234 and events[3]["percent"] == 100.0
+
+
+def test_text_report_to_a_pipe_has_a_line_per_ten_percent():
+    clock, out = Clock(), io.StringIO()         # StringIO is not a terminal
+    report = cli.TextReporter(stream=out, clock=clock)
+    report.start("a.mp4", "b.mp4", "MP4", 100.0)
+    for percent in range(0, 101, 1):
+        clock.now += 1
+        report.progress(percent / 100)
+    report.done("b.mp4", 2_000_000)
+    lines = out.getvalue().splitlines()
+    assert lines[0] == "a.mp4 -> b.mp4 (MP4)" and lines[-1].startswith("done: b.mp4 (2.0 MB)")
+    assert len([l for l in lines if l.startswith("Encoding")]) == 11 and "ETA" in lines[2]
+
+
+def test_quiet_text_report_says_only_errors():
+    out = io.StringIO()
+    report = cli.TextReporter(quiet=True, stream=out, clock=Clock())
+    report.note("x")
+    report.start("a", "b", "s", 1.0)
+    report.progress(0.5)
+    report.done("b", 1)
+    report.error("bad")
+    assert out.getvalue() == "error: bad\n"
+
+
+@pytest.mark.parametrize("seconds, text", [(0, "0:00"), (59.6, "1:00"), (125, "2:05"), (3725, "1:02:05")])
+def test_clock_text(seconds, text):
+    assert cli._clock_text(seconds) == text
+
+
+# --------------------------------------------------------------------------- #
 # A real export
 # --------------------------------------------------------------------------- #
 
@@ -116,3 +199,15 @@ def test_dry_run_writes_nothing(clip, tmp_path, capsys):
     out = str(tmp_path / "out.mp4")
     assert cli.main(["-i", clip, "-o", out, "--dry-run"]) == cli.EXIT_OK
     assert "libx264" in capsys.readouterr().out and not os.path.exists(out)
+
+
+@needs_ffmpeg
+def test_json_mode_prints_only_events(clip, tmp_path, capsys):
+    out = str(tmp_path / "out.mp4")
+    assert cli.main(["-i", clip, "-o", out, "--encoder-preset", "ultrafast", "--json"]) == cli.EXIT_OK
+    captured = capsys.readouterr()
+    events = [json.loads(l) for l in captured.out.splitlines()]            # every line is JSON
+    assert [e["event"] for e in events][0] == "start" and events[-1]["event"] == "done"
+    assert captured.err == ""
+    assert cli.main(["-i", clip, "-o", out, "--json"]) == cli.EXIT_FAILED   # exists
+    assert json.loads(capsys.readouterr().out)["event"] == "error"
