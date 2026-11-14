@@ -4,19 +4,23 @@ chloe_videoeditor.py - Chloe Videoeditor, a small cross platform video editor (W
 that uses FFmpeg for all picture and sound processing. Needs Python 3.8+, Tkinter and FFmpeg 4.4+.
 
     python chloe_videoeditor.py [project (.cvproj), video or image]
+    python chloe_videoeditor.py -i input -o output [options]      (no window: cvecli.py, see --help)
 
 See README.md. Effects are plugins in the effect/ folder, texts in lang/, colors in theme/.
 """
 
 import sys
 
+import cvecli
 from engine import effect
 from engine.config import load_config
-from ui.common import detach_console, win_setup
 
 
 def main(argv):
-    """@param argv  command line without the program name; an optional project or media file"""
+    """@param argv  command line without the program name; an optional project or media file, or options for cvecli"""
+    if cvecli.wants_cli(argv):                # first: no Tk needed, and detach_console() would take the console away
+        sys.exit(cvecli.main(argv))
+    from ui.common import detach_console, win_setup     # imports Tkinter
     detach_console(__file__)
     cfg = load_config()
     effect.discover()

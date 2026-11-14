@@ -13,6 +13,19 @@ Small cross platform video editor (Windows, Linux, macOS) in Python / Tkinter. A
 * It is found in the program folder (`ffmpeg/`, `ffmpeg/bin/`, `bin/`), on PATH and in the usual install folders. Or set it in Settings > General.
 * Windows: `pythonw chloe_videoeditor.py` starts without a console window (python.exe restarts itself that way).
 
+## Command line
+
+Export without a window (no Tkinter needed). Options are named like HandBrakeCLI's; `--help` lists them all.
+
+    python cvecli.py -i project.cvproj -o out.mp4
+    python cvecli.py -i clip.mov -o small.mp4 -Z phone_720
+    python cvecli.py -i clip.mov -o out.mkv -e x265 -q 24 --encoder-preset slow -E opus -B 128
+    python cvecli.py -i clip.mov -o out.mp4 -b 4000 --two-pass --dry-run
+
+`-i` is a project or one video / image. The container follows the extension of `-o`. `-Z` starts from an export preset (`--list-presets`), the other options change it. A value that cannot be used (for example `-e x264` into WebM) is an error, never silently another one; `-y` replaces an existing output file, and the output can never replace an input. `--dry-run` prints the FFmpeg commands. Ctrl+C stops the export and removes the temporary files. Exit code 0 = done, 1 = error, 2 = wrong usage, 130 = stopped.
+
+`chloe_videoeditor.py` hands over to the same code when its command line holds an option, so `python chloe_videoeditor.py -i a.mp4 -o b.mp4` works too.
+
 ## Using it
 
 1. **File > Add media** (Ctrl+I): videos and images become media layers, the first one sets the frame size and rate (Edit > Project settings changes them).
@@ -58,7 +71,8 @@ An effect that needs branches (for example a blurred copy that is blended back) 
 
 ## Files
 
-    chloe_videoeditor.py   entry point
+    chloe_videoeditor.py   entry point (window; options go to cvecli.py)
+    cvecli.py   command line export (no Tk)
     lang.py, theme.py   language and theme support (shared with Chloe Photoviewer)
     engine/   effect.py (effect interfaces + registry), curve.py (tone curve maths), cropbox.py (crop box geometry), project.py, selection.py (effect selection), compiler.py, ffmpeg.py, jobs.py (job queue + workers), preview.py, config.py  (no Tk)
     ui/       app.py, panels.py, curve_editor.py, crop_assist.py (crop assist window), dialogs.py, jobs.py (job queue window), common.py
