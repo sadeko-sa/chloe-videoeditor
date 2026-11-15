@@ -3,6 +3,7 @@ ui/export.py - The export dialog: container, video, dimension, audio and advance
 Every field explains itself in a tooltip (language entries "tip.export.<field>"), there are no help texts in the window.
 """
 
+import datetime
 import os
 import tkinter as tk
 from dataclasses import replace
@@ -11,6 +12,7 @@ from tkinter import filedialog, messagebox, ttk
 from lang import t
 
 from engine import encode as enc
+from engine import naming
 from engine.compiler import CompileError, compile_export
 from engine.ffmpeg import Export
 from engine.jobs import QueueError
@@ -76,6 +78,7 @@ class ExportDialog(Dialog):
     def __init__(self, app):
         super().__init__(app.root, "dlg.export")
         self.app, self.encoders, self.depths = app, app.tools.encoders, app.tools.depths
+        self.auto_path = ""                 # the file the settings suggested; a path that differs was typed or picked
         # the options of this project if it has some, else the ones used last in any project
         self.last = enc.ExportOptions.from_dict(app.project.export or app.cfg["export"], self.encoders, self.depths)
         self.presets = enc.available_presets(self.encoders, self.depths)
@@ -293,12 +296,17 @@ class ExportDialog(Dialog):
         self.fast_check.state(["!disabled"] if o.container == "mp4" else ["disabled"])
 
     def _sync_path(self, o):
-        """Keep the file extension in step with the container; suggest a file name if there is none."""
-        ext = enc.CONTAINERS[o.container].ext
+        """
+        Keep the file in step with the choices: a path from the settings (default folder, file name format) follows
+        every change; a path typed or picked keeps its name and only gets the extension of the container.
+        """
+        app, ext = self.app, enc.CONTAINERS[o.container].ext
         path = self.path_var.get()
-        if not path:
-            base = os.path.splitext(os.path.basename(self.app.project_path or ""))[0] or "video"
-            path = os.path.join(self.app.cfg["last_dir"] or os.path.expanduser("~"), base + ext)
+        if not path or path == self.auto_path:
+            name = naming.render(app.cfg["name_format"], naming.context_for(app.project, app.project_path, o,
+                                                                            datetime.datetime.now()))
+            folder = naming.output_folder(app.cfg["output_dir"], app.project, app.project_path, app.cfg["last_dir"])
+            path = self.auto_path = os.path.join(folder, name + ext)
         self.path_var.set(os.path.splitext(path)[0] + ext)
 
     # ------------------------------------------------------------------ #
@@ -377,8 +385,14 @@ class ExportDialog(Dialog):
         except ValueError:
             messagebox.showerror(t("dlg.error"), t("msg.extra_invalid"), parent=self)
             return
-        if os.path.exists(path) and not messagebox.askyesno(t("dlg.export"), t("msg.overwrite", name=os.path.basename(path)),
-                                                            parent=self):
+        mode = app.cfg["on_exists"]
+        if mode == naming.NUMBER:
+            path = naming.unique_path(path, lambda p: os.path.exists(p) or app.jobs.writes_to(p))
+        elif naming.is_input(path, app.project):
+            messagebox.showerror(t("dlg.error"), t("msg.output_is_input", name=os.path.basename(path)), parent=self)
+            return
+        elif mode == naming.ASK and os.path.exists(path) and not messagebox.askyesno(
+                t("dlg.export"), t("msg.overwrite", name=os.path.basename(path)), parent=self):
             return
         try:
             job = compile_export(app.project)

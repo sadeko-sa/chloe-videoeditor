@@ -448,5 +448,18 @@
   "crop_assist.hint_title": "Control:",
   "crop_assist.loading": "Loading picture...",
   "crop_assist.hint": "arrow keys move 1 px, Shift + arrow keys move 10 px",
-  "crop_assist.not_visible": "This layer is not shown at the current time, so it is not in the picture. Go to a time where it is shown."
+  "crop_assist.not_visible": "This layer is not shown at the current time, so it is not in the picture. Go to a time where it is shown.",
+  "tab.output": "Output",
+  "field.output_dir": "Default folder",
+  "hint.output_dir": "Where exports are saved. Leave empty to use the folder of the first video in the project.",
+  "dlg.pick_output": "Select default output folder",
+  "field.name_format": "File name",
+  "btn.reset": "Reset",
+  "field.name_example": "Example",
+  "export.sample_source": "clip",
+  "field.on_exists": "If the file exists",
+  "exists.ask": "Ask before replacing it",
+  "exists.replace": "Replace it",
+  "exists.number": "Keep both: add a number to the new name",
+  "msg.output_is_input": "{name} is used in the project and cannot be replaced by the export. Choose another name."
 }

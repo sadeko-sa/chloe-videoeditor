@@ -12,6 +12,7 @@ from typing import Any, Dict, List
 from .encode import ExportOptions
 from .ffmpeg import APP_DIR
 from .jobs import THREADS_RANGE, WORKERS_RANGE
+from .naming import COLLISIONS, DEFAULT_FORMAT
 
 CONFIG_NAME = "config.json"
 """File name of the config in the program folder (no fallback to any older name)."""
@@ -19,13 +20,16 @@ CONFIG_NAME = "config.json"
 DEFAULTS: Dict[str, Any] = {
     "language": "", "theme": "", "geometry": "1280x800", "zoomed": False,
     "ffmpeg": "", "preview_max": 1280, "last_dir": "",
-    "export": {},
+    "export": {}, "output_dir": "", "name_format": DEFAULT_FORMAT, "on_exists": "ask",
     "cache_dir": "", "recent": [],
     "workers": 1, "worker_threads": 0, "goto_field": "time", "crop_ratio": "free",
 }
 """Config entries and defaults. "ffmpeg" = path of ffmpeg or its folder (empty = search);
 "preview_max" = longest side in pixels of the preview picture;
 "export" = the export options last used (see engine/encode.py ExportOptions; {} = defaults);
+"output_dir" = default folder of exports (empty = the folder of the first video of the project);
+"name_format" = file name of an export with {tokens} (see engine/naming.py);
+"on_exists" = what to do when the output file exists: "ask", "replace" or "number" (see engine/naming.py COLLISIONS);
 "cache_dir" = folder that holds the preview cache (empty = cache/ in the program folder);
 "recent" = project files opened or saved last, newest first (at most RECENT_MAX);
 "workers" = number of job queue workers (jobs rendered at the same time); "worker_threads" = thread limit of each job (0 = auto);
@@ -78,7 +82,7 @@ def load_config() -> Dict[str, Any]:
     cfg["preview_max"] = _clamp(cfg["preview_max"], *PREVIEW_RANGE, DEFAULTS["preview_max"])
     cfg["workers"] = _clamp(cfg["workers"], *WORKERS_RANGE, DEFAULTS["workers"])
     cfg["worker_threads"] = _clamp(cfg["worker_threads"], *THREADS_RANGE, DEFAULTS["worker_threads"])
-    for key in ("language", "theme", "geometry", "ffmpeg", "last_dir", "cache_dir", "crop_ratio"):
+    for key in ("language", "theme", "geometry", "ffmpeg", "last_dir", "cache_dir", "crop_ratio", "output_dir", "name_format"):
         if not isinstance(cfg[key], str):
             cfg[key] = DEFAULTS[key]
     # recent: only non-empty text entries, each file once, newest first; always a list of its own
@@ -88,6 +92,9 @@ def load_config() -> Dict[str, Any]:
             seen.add(os.path.normcase(item))
             recent.append(item)
     cfg["recent"] = recent[:RECENT_MAX]
+    cfg["name_format"] = cfg["name_format"].strip() or DEFAULT_FORMAT
+    if cfg["on_exists"] not in COLLISIONS:
+        cfg["on_exists"] = DEFAULTS["on_exists"]
     cfg["export"] = ExportOptions.from_dict(cfg["export"]).to_dict()
     cfg["zoomed"] = bool(cfg["zoomed"])
     if cfg["goto_field"] not in ("time", "frame"):

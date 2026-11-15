@@ -251,6 +251,11 @@ class JobQueue:
         self._changed(job)
         return job
 
+    def writes_to(self, path: str) -> bool:
+        """@return True if a job that waits, runs or is paused writes this file"""
+        with self._cond:
+            return any(j.state.active and _same_file(j.out_path, path) for j in self._jobs)
+
     def jobs(self) -> List[ExportJob]:
         """@return the jobs in the order they were added (a copy)"""
         with self._cond:

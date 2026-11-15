@@ -1,8 +1,10 @@
 """ui/dialogs.py - Settings, about and project settings dialogs."""
 
+import datetime
 import os
 import sys
 import tkinter as tk
+from dataclasses import replace
 from tkinter import filedialog, ttk
 
 from lang import list_languages, resolve_language, t
@@ -10,6 +12,8 @@ from theme import ThemeDialog, list_themes, resolve_theme
 
 from engine import APP_NAME, VERSION
 from engine import effect as fx
+from engine import encode as enc
+from engine import naming
 from engine.config import PREVIEW_RANGE, config_path
 from engine.jobs import THREADS_RANGE, WORKERS_RANGE
 from engine.project import even
@@ -68,7 +72,7 @@ class AboutDialog(Dialog):
 
 
 class SettingsDialog(Dialog):
-    """Settings with the tabs General, Appearance, Language and About. OK saves the config, Cancel drops the changes."""
+    """Settings with the tabs General, Output, Worker, Appearance, Language and About. OK saves the config, Cancel drops the changes."""
 
     def __init__(self, app):
         """@param app  the App that opened it"""
@@ -80,6 +84,7 @@ class SettingsDialog(Dialog):
         self.nb = ttk.Notebook(frm)
         self.nb.pack(fill="both", expand=True)
         self._tab_general(cfg)
+        self._tab_output(cfg)
         self._tab_workers(cfg)
         self._tab_appearance(cfg)
         self._tab_language(cfg)                                     # next to the last tab (About)
@@ -118,6 +123,67 @@ class SettingsDialog(Dialog):
         ttk.Button(page, text=t("btn.pick"), command=self._pick_cache).grid(row=3, column=2, pady=(14, 4))
         ttk.Label(page, text=t("hint.cache_dir"), wraplength=420, justify="left").grid(
             row=4, column=1, columnspan=2, sticky="w", padx=(12, 0))
+
+    def _tab_output(self, cfg):
+        """
+        The Output tab: default folder, file name format (click a token to add it) and what to do when a file exists.
+        The export dialog starts from these; a file typed or picked there still wins.
+        """
+        page = self._page("tab.output")
+        page.columnconfigure(1, weight=1)
+        ttk.Label(page, text=t("field.output_dir")).grid(row=0, column=0, sticky="w", pady=4)
+        self.out_dir_var = tk.StringVar(value=cfg["output_dir"])
+        ttk.Entry(page, textvariable=self.out_dir_var, width=40).grid(row=0, column=1, sticky="we", padx=(12, 4))
+        ttk.Button(page, text=t("btn.pick"), command=self._pick_output).grid(row=0, column=2)
+        ttk.Label(page, text=t("hint.output_dir"), wraplength=420, justify="left").grid(
+            row=1, column=1, columnspan=2, sticky="w", padx=(12, 0))
+        ttk.Label(page, text=t("field.name_format")).grid(row=2, column=0, sticky="w", pady=(14, 4))
+        self.format_var = tk.StringVar(value=cfg["name_format"])
+        self.format_entry = ttk.Entry(page, textvariable=self.format_var, width=40)
+        self.format_entry.grid(row=2, column=1, sticky="we", padx=(12, 4), pady=(14, 4))
+        reset = ttk.Button(page, text=t("btn.reset"), command=lambda: self.format_var.set(naming.DEFAULT_FORMAT))
+        reset.grid(row=2, column=2, pady=(14, 4))
+        tokens = ttk.Frame(page)
+        tokens.grid(row=3, column=1, columnspan=2, sticky="w", padx=(12, 0))
+        for i, name in enumerate(naming.TOKENS):
+            button = ttk.Button(tokens, text="{%s}" % name, width=11, command=lambda n=name: self._add_token(n))
+            button.grid(row=i // 3, column=i % 3, sticky="w", padx=(0, 4), pady=2)
+        ttk.Label(page, text=t("field.name_example")).grid(row=4, column=0, sticky="nw", pady=(8, 4))
+        self.example = ttk.Label(page, wraplength=420, justify="left")
+        self.example.grid(row=4, column=1, columnspan=2, sticky="w", padx=(12, 0), pady=(8, 4))
+        ttk.Label(page, text=t("field.on_exists")).grid(row=5, column=0, sticky="nw", pady=(14, 4))
+        self.exists_var = tk.StringVar(value=cfg["on_exists"])
+        modes = ttk.Frame(page)
+        modes.grid(row=5, column=1, columnspan=2, sticky="w", padx=(12, 0), pady=(10, 0))
+        for mode in naming.COLLISIONS:
+            radio = ttk.Radiobutton(modes, text=t("exists." + mode), value=mode, variable=self.exists_var)
+            radio.pack(anchor="w", pady=1)
+        for var in (self.out_dir_var, self.format_var):
+            var.trace_add("write", lambda *_a: self._show_example())
+        self._show_example()
+
+    def _add_token(self, name):
+        """Add {name} at the end of the file name format and put the cursor there."""
+        self.format_var.set(naming.append_token(self.format_var.get(), name))
+        self.format_entry.focus_set()
+        self.format_entry.icursor("end")
+
+    def _show_example(self):
+        """Show the file the settings make for the project that is open now (a sample name if it has no video)."""
+        app, o = self.app, enc.ExportOptions.from_dict(self.app.cfg["export"])
+        ctx = naming.context_for(app.project, app.project_path, o, datetime.datetime.now())
+        if not ctx.source:
+            ctx = replace(ctx, source=t("export.sample_source"))
+        fmt = self.format_var.get().strip() or naming.DEFAULT_FORMAT
+        folder = naming.output_folder(self.out_dir_var.get().strip(), app.project, app.project_path, app.cfg["last_dir"])
+        self.example.configure(text=os.path.join(folder, naming.render(fmt, ctx) + enc.CONTAINERS[o.container].ext))
+
+    def _pick_output(self):
+        """Choose the default folder in a folder dialog (starts at the folder typed in the field, if any)."""
+        path = filedialog.askdirectory(parent=self, title=t("dlg.pick_output"),
+                                       initialdir=self.out_dir_var.get().strip() or None)
+        if path:
+            self.out_dir_var.set(path)
 
     def _tab_workers(self, cfg):
         """The Workers tab: how many workers render the job queue, and the thread limit of each."""
@@ -198,6 +264,10 @@ class SettingsDialog(Dialog):
         cfg["ffmpeg"] = self.ffmpeg_var.get().strip()
         cache = self.cache_var.get().strip()
         cfg["cache_dir"] = os.path.abspath(os.path.expanduser(cache)) if cache else ""    # empty = default folder
+        output = self.out_dir_var.get().strip()
+        cfg["output_dir"] = os.path.abspath(os.path.expanduser(output)) if output else ""     # empty = folder of the input
+        cfg["name_format"] = self.format_var.get().strip() or naming.DEFAULT_FORMAT
+        cfg["on_exists"] = self.exists_var.get()
         cfg["preview_max"] = _int(self.preview_var.get(), PREVIEW_RANGE[0], PREVIEW_RANGE[1], cfg["preview_max"])
         cfg["workers"] = _int(self.workers_var.get(), *WORKERS_RANGE, cfg["workers"])
         cfg["worker_threads"] = _int(self.threads_var.get(), *THREADS_RANGE, cfg["worker_threads"])
