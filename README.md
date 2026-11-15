@@ -24,7 +24,7 @@ Export without a window (no Tkinter needed). Options are named like HandBrakeCLI
 
 `-i` is a project or one video / image. The container follows the extension of `-o`. `-Z` starts from an export preset (`--list-presets`), the other options change it. A value that cannot be used (for example `-e x264` into WebM) is an error, never silently another one; `-y` replaces an existing output file, and the output can never replace an input. `--dry-run` prints the FFmpeg commands. Ctrl+C stops the export and removes the temporary files. Exit code 0 = done, 1 = error, 2 = wrong usage, 130 = stopped.
 
-Progress shows percent, speed (seconds of result per second of work), elapsed time and ETA: `Encoding  42%  1.8x  elapsed 0:12  ETA 0:17`, redrawn on one line in a terminal, one line per 10 % when piped. `--quiet` prints errors only.
+Progress shows percent, speed (seconds of result per second of work), elapsed time and ETA: `Encoding  42%  1.8x  elapsed 0:12  ETA 0:17`, redrawn on one line in a terminal, one line per 10 % when piped (`--progress-step 1` for one per percent). `--quiet` prints errors only.
 
 **For other programs:** `--json` prints one JSON object per line on stdout and nothing else, so a front end can run `cvecli.py` and read the lines. Every object has `event`: `note` (level, text), `start` (source, target, summary, duration), `progress` (percent, elapsed, eta, speed; eta / speed can be null at the start), then one of `done` (target, bytes, percent, elapsed), `stopped` or `error` (text); `--dry-run` sends `commands`, `--list-presets` sends `presets`. The exit code says the same as the last event. Stop an export by sending the process SIGINT / SIGTERM (Ctrl+C); the temporary files are removed.
 

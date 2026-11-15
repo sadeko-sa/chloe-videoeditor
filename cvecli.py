@@ -110,6 +110,8 @@ def build_parser(prog: Optional[str] = None) -> argparse.ArgumentParser:
     run.add_argument("--threads", type=int, default=0, metavar="N", help="thread limit of FFmpeg (default 0: automatic)")
     run.add_argument("--ffmpeg", metavar="PATH", help="FFmpeg file or folder (default: the setting of the window, then search)")
     run.add_argument("--dry-run", action="store_true", help="print the FFmpeg command(s) and exit")
+    run.add_argument("--progress-step", type=float, default=10.0, metavar="PERCENT",
+                     help="percent between two progress lines when the output is a pipe or file (default 10; 1 or 0.5 for a log you watch)")
     run.add_argument("--quiet", action="store_true", help="print nothing but errors")
     run.add_argument("--json", action="store_true",
                      help="for other programs: one JSON event per line on stdout (see JsonReporter in this file)")
@@ -315,12 +317,15 @@ class TextReporter(Reporter):
 
         Encoding  42%  1.8x  elapsed 0:12  ETA 0:17
 
-    to a pipe or file it is one line at every 10 %, so logs stay short. quiet = errors only. Results that are the
+    to a pipe or file it is one line at every `step` percent (default 10), so logs stay short. quiet = errors only. Results that are the
     point of the call (commands, presets) go to stdout.
     """
 
-    def __init__(self, quiet: bool = False, stream: Optional[TextIO] = None, clock: Callable[[], float] = time.monotonic):
+    def __init__(self, quiet: bool = False, stream: Optional[TextIO] = None, clock: Callable[[], float] = time.monotonic,
+                 step: float = 10.0):
+        """@param step  percent between two lines when the output is not a terminal"""
         super().__init__(clock)
+        self._step = max(0.1, min(step, 100.0))
         self._out = stream or sys.stderr
         self._quiet = quiet
         self._tty = self._out.isatty()
@@ -340,14 +345,14 @@ class TextReporter(Reporter):
             self._open = False
 
     def _draw(self, stats: Dict[str, Any]) -> None:
-        percent = int(stats["percent"])
-        step = percent if self._tty else percent // 10 * 10
+        percent = stats["percent"]
+        step = int(percent) if self._tty else int(percent / self._step)
         if step == self._shown and not self._tty:
             return
         self._shown = step
-        parts = ["Encoding %3d%%" % percent]
+        parts = ["Encoding %5.1f%%" % percent if self._step < 1 and not self._tty else "Encoding %3d%%" % percent]
         if stats["speed"] is not None:
-            parts.append("%.1fx" % stats["speed"])
+            parts.append("%.2fx" % stats["speed"])
         parts.append("elapsed " + _clock_text(stats["elapsed"]))
         if stats["eta"] is not None:
             parts.append("ETA " + _clock_text(stats["eta"]))
@@ -507,7 +512,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parser.parse_args(argv)
     if not args.list_presets and not (args.input and args.output):
         parser.error("-i / --input and -o / --output are required")
-    report = JsonReporter() if args.json else TextReporter(args.quiet)
+    report = JsonReporter() if args.json else TextReporter(args.quiet, step=args.progress_step)
     try:
         cfg = load_config()
         effect.discover()
