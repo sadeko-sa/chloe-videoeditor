@@ -15,7 +15,7 @@ import os
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, ClassVar, Dict, List, Optional
+from typing import Any, ClassVar, Dict, List, Optional, Sequence, Tuple
 
 from . import effect as fx
 
@@ -31,6 +31,9 @@ IMAGE_SECONDS = 5.0
 FITS = ("fit", "fill")
 """Media layer placement: "fit" = whole picture inside the frame, "fill" = frame filled, edges cropped."""
 
+MIN_FRAME = 16
+"""Smallest side in pixels of a project frame, and of the picture that is left after the project crop."""
+
 
 class ProjectError(Exception):
     """A project file cannot be read."""
@@ -39,6 +42,50 @@ class ProjectError(Exception):
 def even(value: float) -> int:
     """@return value as an even whole number of at least 2 (video sizes must be even)"""
     return max(2, int(round(value)) // 2 * 2)
+
+
+def _even_down(value: Any) -> int:
+    """@return value as a whole number of pixels, not below 0, rounded DOWN to an even number (a cut of 3 becomes 2)"""
+    try:
+        return max(0, int(value)) // 2 * 2
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _axis_cuts(first: Any, second: Any, size: int) -> Tuple[int, int]:
+    """
+    The two cuts of one axis (left / right or top / bottom) made usable.
+
+    @param first   cut from the first edge, pixels
+    @param second  cut from the opposite edge, pixels
+    @param size    side of the project frame on this axis (even)
+    @return        both cuts, even and not negative; if together they leave less than MIN_FRAME pixels they are scaled
+                   down in the same ratio. Every cut being even and the frame side being even, the side that is left
+                   is even too (video sizes must be even) and an offset never falls between two chroma samples.
+    """
+    first, second = _even_down(first), _even_down(second)
+    room = max(size - MIN_FRAME, 0)
+    total = first + second
+    if total > room:
+        first, second = first * room // total, second * room // total
+        first, second = first // 2 * 2, second // 2 * 2
+    return first, second
+
+
+def normalize_cuts(cuts: Sequence[Any], width: int, height: int) -> Tuple[int, int, int, int]:
+    """
+    @param cuts    (left, right, top, bottom) pixels of the project frame; anything that is not four numbers = no cut
+    @param width   width of the project frame
+    @param height  height of the project frame
+    @return        (left, right, top, bottom) as the project keeps them: whole, even, and leaving at least MIN_FRAME
+    """
+    try:
+        left, right, top, bottom = list(cuts)
+    except (TypeError, ValueError):
+        return 0, 0, 0, 0
+    left, right = _axis_cuts(left, right, width)
+    top, bottom = _axis_cuts(top, bottom, height)
+    return left, right, top, bottom
 
 
 def _number(value: Any, default: float, lo: float, hi: float) -> float:
@@ -148,10 +195,16 @@ class MediaLayer(Layer):
     @param in_point         second of the file where the layer starts
     @param duration         seconds shown (also the length on the timeline)
     @param source_duration  length of the file (0 for an image)
+    @param width            width of the picture of the file as it is shown (turned files already turned), 0 = not known
+    @param height           height of the picture of the file as it is shown, 0 = not known. Both only let the
+                            compiler cut the project crop out of the file BEFORE it is scaled when the file has the
+                            size of the frame; unknown (older project files) is always safe, only a little slower.
     """
     path: str = ""
     in_point: float = 0.0
     source_duration: float = 0.0
+    width: int = 0
+    height: int = 0
     has_audio: bool = False
     is_image: bool = False
     fit: str = "fit"
@@ -168,6 +221,8 @@ class MediaLayer(Layer):
         data.update(path=self.path, in_point=self.in_point, source_duration=self.source_duration,
                     has_audio=self.has_audio, is_image=self.is_image, fit=self.fit, volume=self.volume,
                     audio_denoise=self.audio_denoise)
+        if self.width > 0 and self.height > 0:                      # only written when known: files stay as they were
+            data.update(width=self.width, height=self.height)
         return data
 
     @classmethod
@@ -178,6 +233,10 @@ class MediaLayer(Layer):
         layer.is_image = data.get("is_image") is True
         layer.has_audio = data.get("has_audio") is True and not layer.is_image
         layer.source_duration = _number(data.get("source_duration"), 0.0, 0.0, 1e6)
+        layer.width = int(_number(data.get("width"), 0, 0, 16384))
+        layer.height = int(_number(data.get("height"), 0, 0, 16384))
+        if not (layer.width and layer.height):                      # both or none
+            layer.width = layer.height = 0
         layer.in_point = _number(data.get("in_point"), 0.0, 0.0, 1e6)
         layer.fit = data.get("fit") if data.get("fit") in FITS else "fit"
         layer.volume = _number(data.get("volume"), 1.0, 0.0, 2.0)
@@ -208,8 +267,14 @@ class AdjustmentLayer(Layer):
 @dataclass
 class Project:
     """
-    The whole edit: frame size, frame rate and the layers (bottom to top).
+    The whole edit: frame size, frame rate, the crop and the layers (bottom to top).
 
+    @param width        width of the frame the layers are fitted into (before the crop)
+    @param height       height of that frame
+    @param crop         (left, right, top, bottom) pixels cut from the edges of that frame, like the crop of HandBrake.
+                        What is left is the picture of the project: out_width x out_height. The picture, the preview and
+                        the export all have that size, so nothing has to be set by hand after cropping. Use set_crop()
+                        and cuts(), which keep the numbers whole, even and inside the frame.
     @param sel_layer    id of the layer the window had selected when the project was saved, None = none saved
     @param sel_effects  indices of the selected effects of that layer (Layer.effects)
     @param sel_active   the active one of the selected effects, None = none saved
@@ -225,11 +290,32 @@ class Project:
     height: int = 720
     fps: float = 30.0
     layers: List[Layer] = field(default_factory=list)
+    crop: Tuple[int, int, int, int] = (0, 0, 0, 0)
     sel_layer: Optional[str] = field(default=None, compare=False)
     sel_effects: List[int] = field(default_factory=list, compare=False)
     sel_active: Optional[int] = field(default=None, compare=False)
     sel_time: float = field(default=0.0, compare=False)
     export: Dict[str, Any] = field(default_factory=dict, compare=False)
+
+    def cuts(self) -> Tuple[int, int, int, int]:
+        """@return (left, right, top, bottom): the crop as it is used (whole, even, leaving at least MIN_FRAME pixels)"""
+        return normalize_cuts(self.crop, self.width, self.height)
+
+    def set_crop(self, left: int, right: int, top: int, bottom: int) -> None:
+        """Set the crop; the numbers are made usable (see normalize_cuts()), so cuts() may differ a little."""
+        self.crop = normalize_cuts((left, right, top, bottom), self.width, self.height)
+
+    @property
+    def out_width(self) -> int:
+        """@return width of the picture of the project: the frame without the left and right cut"""
+        left, right, _top, _bottom = self.cuts()
+        return self.width - left - right
+
+    @property
+    def out_height(self) -> int:
+        """@return height of the picture of the project: the frame without the top and bottom cut"""
+        _left, _right, top, bottom = self.cuts()
+        return self.height - top - bottom
 
     def duration(self) -> float:
         """@return the end of the last media layer in seconds (0 if there is no media)"""
@@ -260,7 +346,7 @@ class Project:
             length = info.duration
         layer = MediaLayer(os.path.splitext(os.path.basename(info.path))[0] or "Media",
                            duration=length, path=info.path, source_duration=info.duration,
-                           has_audio=info.has_audio, is_image=info.is_image)
+                           has_audio=info.has_audio, is_image=info.is_image, width=info.width, height=info.height)
         if index is None:
             self.layers.append(layer)
         else:
@@ -268,8 +354,11 @@ class Project:
         return layer
 
     def to_dict(self) -> Dict[str, Any]:
-        return {"format": FORMAT, "version": FORMAT_VERSION, "width": self.width, "height": self.height,
+        data = {"format": FORMAT, "version": FORMAT_VERSION, "width": self.width, "height": self.height,
                 "fps": self.fps, "layers": [l.to_dict() for l in self.layers]}
+        if any(self.cuts()):                                        # only written when there is one: files stay as they were
+            data["crop"] = list(self.cuts())
+        return data
 
     def to_file_dict(self) -> Dict[str, Any]:
         """@return to_dict() plus the selection (layer and effects); this is what a project file holds"""
@@ -312,6 +401,8 @@ class Project:
                 project.layers.append(MediaLayer.from_dict(item))
             elif item.get("kind") == "adjustment":
                 project.layers.append(AdjustmentLayer.from_dict(item))
+        project.crop = normalize_cuts(data.get("crop") if isinstance(data.get("crop"), list) else [], project.width,
+                                      project.height)
         project._load_selection(data.get("selection"))
         if isinstance(data.get("export"), dict):
             project.export = dict(data["export"])

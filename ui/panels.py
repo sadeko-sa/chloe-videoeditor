@@ -294,9 +294,10 @@ class ParamEditor(ttk.Frame):
                      lambda e, p=param, b=box: send(p.key, p.choices[max(b.current(), 0)]))
 
     def _range(self, param):
-        """@return (lowest, highest) value of a slider; a pixel parameter (Param.extent) runs up to the project size"""
+        """@return (lowest, highest) value of a slider; a pixel parameter (Param.extent) runs up to the size of the
+        project's picture (the frame without the project crop)"""
         if param.extent:
-            size = self.app.project.width if param.extent == "width" else self.app.project.height
+            size = self.app.project.out_width if param.extent == "width" else self.app.project.out_height
             return param.min, max(param.min, min(param.max, float(size)))
         return param.min, param.max
 

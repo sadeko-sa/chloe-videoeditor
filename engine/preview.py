@@ -142,7 +142,7 @@ def _stamp(layer: Layer):
 
 def frame_key(project: Project, layers: List[Layer], t: float, size: Tuple[int, int]) -> str:
     """@return cache key of the picture made by `layers` at second t in this size"""
-    data = {"p": [project.width, project.height, project.fps], "t": round(t, 4), "s": list(size),
+    data = {"p": [project.width, project.height, project.fps, list(project.cuts())], "t": round(t, 4), "s": list(size),
             "l": [[l.render_state(), _stamp(l)] for l in layers]}
     return hashlib.sha1(json.dumps(data, sort_keys=True).encode("utf-8")).hexdigest()
 
@@ -197,7 +197,8 @@ class PreviewEngine:
         @param focus_id  id of the layer being edited (its lower layers get cached), or None
         @param original  True = the picture without any effect (to compare with the edited one)
         @param view      None = the whole frame at `size`. Else (x, y, w, h, zoom): only that part of the project
-                         picture (project pixels), delivered as a picture of round(w*zoom) x round(h*zoom) pixels
+                         picture (its pixels: the frame without the crop), delivered as a picture of
+                         round(w*zoom) x round(h*zoom) pixels
         @return          number of the request, given back to `deliver`
         """
         with self._cond:
@@ -278,7 +279,7 @@ class PreviewEngine:
     def _view_frame(project: Project, size: Tuple[int, int], zoom: float) -> Tuple[int, int]:
         """@return size of the whole frame that is rendered behind a view at this zoom"""
         scale = next((b for b in VIEW_SCALES if b >= zoom - 1e-9), 1.0)     # fixed steps: zoom steps share a frame
-        return (even(project.width * scale), even(project.height * scale)) if scale < 1.0 else size
+        return (even(project.out_width * scale), even(project.out_height * scale)) if scale < 1.0 else size
 
     def _interim(self, project: Project, t: float, size: Tuple[int, int],
                  view: Tuple[int, int, int, int, float], focus_id: Optional[str] = None) -> Optional[str]:
@@ -305,7 +306,7 @@ class PreviewEngine:
             except (FFmpegError, CompileError):
                 return None
         fw, fh = fit
-        sx, sy = fw / float(project.width), fh / float(project.height)
+        sx, sy = fw / float(project.out_width), fh / float(project.out_height)
         bx, by = min(int(math.floor(x * sx)), fw - 1), min(int(math.floor(y * sy)), fh - 1)
         bw = max(1, min(fw - bx, int(math.ceil((x + w) * sx)) - bx))
         bh = max(1, min(fh - by, int(math.ceil((y + h) * sy)) - by))
@@ -336,7 +337,7 @@ class PreviewEngine:
     def _view_box(project: Project, full: Tuple[int, int], view: Tuple[int, int, int, int, float]):
         """@return (x, y, w, h) of the view in the pixels of the `full` frame, and (w, h) of the picture to deliver"""
         x, y, w, h, zoom = view
-        sx, sy = full[0] / float(project.width), full[1] / float(project.height)
+        sx, sy = full[0] / float(project.out_width), full[1] / float(project.out_height)
         cx, cy = min(int(round(x * sx)), full[0] - 1), min(int(round(y * sy)), full[1] - 1)
         cw, ch = max(1, min(full[0] - cx, int(round(w * sx)))), max(1, min(full[1] - cy, int(round(h * sy))))
         return (cx, cy, cw, ch), (max(1, int(round(cw / sx * zoom))), max(1, int(round(ch / sy * zoom))))
@@ -455,9 +456,9 @@ class PreviewEngine:
 
 def save_frame(tools: Tools, project: Project, t: float, path: str) -> None:
     """
-    Render the picture at second t in full project size to an image file (.png or .jpg).
+    Render the picture at second t in full size (the project frame without the crop) to an image file (.png or .jpg).
 
     @raise FFmpegError, CompileError on failure
     """
-    job = compile_frame(project, active_layers(project, t), t, (project.width, project.height))
+    job = compile_frame(project, active_layers(project, t), t, (project.out_width, project.out_height))
     render_frame(tools, job, path)

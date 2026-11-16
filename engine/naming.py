@@ -61,7 +61,7 @@ def context_for(project: Project, project_path: str, options: ExportOptions, now
     """@return the context of an export of this project (project_path None or empty = never saved)"""
     media = project.media_layers()
     return NameContext(_stem(media[0].path) if media else "", _stem(project_path or ""), now, options,
-                       project.width, project.height, project.fps)
+                       project.out_width, project.out_height, project.fps)
 
 
 def _number(value: float) -> str:

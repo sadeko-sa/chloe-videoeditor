@@ -6,6 +6,8 @@ Uses the same engine as File > Export video (no Tk), so the result is the same. 
     python cvecli.py -i project.cvproj -o out.mp4
     python cvecli.py -i clip.mov -o small.mp4 -Z phone_720
     python cvecli.py -i clip.mov -o out.mkv -e x265 -q 24 --encoder-preset slow -E opus -B 128
+    python cvecli.py -i clip.mov -o out.mp4 --crop 140:140:0:0
+    python cvecli.py -i clip.mov -o out.mp4 --auto-crop
     python cvecli.py --help
 
 chloe_videoeditor.py hands over to main() here when its command line holds an option (an argument starting with "-"),
@@ -23,9 +25,9 @@ import subprocess
 import sys
 import time
 from dataclasses import fields, replace
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, TextIO
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, TextIO, Tuple
 
-from engine import APP_NAME, VERSION, effect
+from engine import APP_NAME, VERSION, autocrop, effect
 from engine import encode as enc
 from engine import ffmpeg as ff
 from engine.compiler import CompileError, compile_export
@@ -85,6 +87,22 @@ _NOTED = ("container", "video", "audio")
 """Fields whose change the user is told about; the rest (speed, CRF, ...) only follow from these."""
 
 
+def parse_crop(text: str) -> Tuple[int, int, int, int]:
+    """
+    @param text  "top:bottom:left:right" in pixels, the order of HandBrakeCLI's --crop
+    @return      (left, right, top, bottom), the order the project keeps
+    @raise argparse.ArgumentTypeError if it is not four whole numbers of 0 or more
+    """
+    parts = text.split(":")
+    try:
+        top, bottom, left, right = (int(part) for part in parts)
+    except ValueError:
+        raise argparse.ArgumentTypeError("%r is not top:bottom:left:right in whole pixels" % text)
+    if len(parts) != 4 or min(top, bottom, left, right) < 0:
+        raise argparse.ArgumentTypeError("%r is not top:bottom:left:right in whole pixels" % text)
+    return left, right, top, bottom
+
+
 def build_parser(prog: Optional[str] = None) -> argparse.ArgumentParser:
     """@return the parser; an option the user left out is not in the result at all (see export_options())"""
     parser = argparse.ArgumentParser(
@@ -105,6 +123,14 @@ def build_parser(prog: Optional[str] = None) -> argparse.ArgumentParser:
                        help="two-pass encoding (with -b; x264, x265, VP9, libaom)")
     video.add_argument("--no-faststart", dest="faststart", action="store_false", default=argparse.SUPPRESS,
                        help="MP4: keep the index at the end of the file")
+    picture = parser.add_argument_group("picture")
+    cut = picture.add_mutually_exclusive_group()                    # a fixed crop or the detected one, not both
+    cut.add_argument("--crop", type=parse_crop, metavar="T:B:L:R", default=None,
+                     help="cut pixels from the edges of the frame, top:bottom:left:right like HandBrakeCLI (0:0:0:0 = "
+                          "none); the picture is what is left, so the output size follows. Replaces the crop of a project")
+    cut.add_argument("--auto-crop", dest="auto_crop", action="store_true",
+                     help="find black bars on pictures spread over the project and cut them (the least cut on every "
+                          "side, like the automatic crop of HandBrake)")
     run = parser.add_argument_group("running")
     run.add_argument("-y", "--overwrite", action="store_true", help="replace the output file if it exists")
     run.add_argument("--threads", type=int, default=0, metavar="N", help="thread limit of FFmpeg (default 0: automatic)")
@@ -462,6 +488,31 @@ def _stop_on_signal(export: ff.Export) -> None:
             signal.signal(number, lambda _number, _frame: export.cancel())
 
 
+def apply_crop(args: argparse.Namespace, tools: ff.Tools, project: Project, report: Reporter) -> None:
+    """
+    Put the crop the command line asks for into the project (it replaces the crop saved in a project file). Without
+    --crop and --auto-crop the project keeps its own.
+
+    @param args     the parsed command line
+    @param tools    the FFmpeg programs (auto crop renders pictures)
+    @param project  the project to change
+    @param report   gets one line saying what was cut
+    @raise CliError if the pictures for the automatic crop cannot be made
+    """
+    if args.crop is None and not args.auto_crop:
+        return
+    if args.auto_crop:
+        try:
+            project.set_crop(*autocrop.detect(tools, project))
+        except ff.FFmpegError as exc:
+            raise CliError("auto crop failed: %s" % exc)
+    else:
+        project.set_crop(*args.crop)
+    left, right, top, bottom = project.cuts()
+    report.note("crop top:bottom:left:right = %d:%d:%d:%d, picture %dx%d"
+                % (top, bottom, left, right, project.out_width, project.out_height))
+
+
 def render(args: argparse.Namespace, tools: ff.Tools, report: Reporter) -> int:
     """
     Load the input, work out the settings and run the export.
@@ -481,6 +532,7 @@ def render(args: argparse.Namespace, tools: ff.Tools, report: Reporter) -> int:
         raise CliError("the output would replace an input file: %s" % args.output)
     if os.path.exists(args.output) and not (args.overwrite or args.dry_run):
         raise CliError("%s exists (use -y to replace it)" % args.output)
+    apply_crop(args, tools, project, report)
     try:
         job = compile_export(project)
     except CompileError as exc:

@@ -1,9 +1,16 @@
 """
-ui/crop_assist.py - The crop assist: a window in which the cut of a Crop effect is set with the
+ui/crop_assist.py - The crop assist: a window in which a cut is set with the
 mouse, like the crop of a phone gallery. It shows the picture of the preview (made by the preview cache, see
 PreviewEngine.render_still) with a box on it. Drag the corners or edges of the box, drag inside it to move it, choose
 a ratio and turn the box between
-portrait and landscape. Apply writes the four cuts (pixels of the project frame) into the effect in one undo step. All the geometry is in engine/cropbox.py; this module only turns mouse positions into it.
+portrait and landscape. All the geometry is in engine/cropbox.py; this module only turns mouse positions into it.
+
+It serves two cuts:
+  * a Crop effect (CropAssist(app, layer_id, index)): the box lies on the picture of the project, Apply writes the four
+    cuts into the effect in one undo step.
+  * the crop of the whole video (CropAssist(app, None, None), Edit > Crop video): the box lies on the whole frame before
+    the crop, Apply sets the project crop in one undo step, and the picture of the project (preview, export) becomes
+    the size that is left, like in HandBrake. The Auto button finds black bars (engine/autocrop.py).
 """
 
 import copy
@@ -17,9 +24,10 @@ from theme import resolve_color
 
 from engine import effect as fx
 from engine.compiler import CompileError
+from engine import autocrop
 from engine.cropbox import CropBox
 from engine.ffmpeg import FFmpegError
-from engine.project import even
+from engine.project import even, normalize_cuts
 from ui.common import Dialog, Tip, ok_cancel
 
 HANDLE = 14
@@ -58,27 +66,38 @@ def ratio_text(width, height):
 
 
 class CropAssist(Dialog):
-    """The crop assist window for one Crop effect; build it and it blocks until it is closed (Apply writes the values)."""
+    """
+    The crop assist window for one Crop effect, or for the crop of the whole video; build it and it blocks until it is
+    closed (Apply writes the values).
+    """
 
     def __init__(self, app, layer_id, index):
         """
-        @param app       the App (project, preview engine, colors, set_params)
-        @param layer_id  id of the layer that holds the effect
-        @param index     index of the Crop effect in layer.effects
+        @param app       the App (project, preview engine, colors, set_params, set_crop)
+        @param layer_id  id of the layer that holds the effect; None = the crop of the whole video (project crop)
+        @param index     index of the Crop effect in layer.effects; None for the project crop
         """
-        super().__init__(app.root, "crop_assist.title")
+        self.project_mode = layer_id is None
+        super().__init__(app.root, "crop_assist.title_video" if self.project_mode else "crop_assist.title")
         from effect.crop import CUT_KEYS                            # here: a broken plugin must not stop the program
         self.app, self.layer_id, self.index = app, layer_id, index
         self.cut_keys = CUT_KEYS
         project = app.project
-        self.box = CropBox(project.width, project.height)
-        layer = project.find(layer_id)
-        values = fx.get(layer.effects[index].effect_id).normalize(layer.effects[index].values)
-        self.box.set_cuts(*(values[key] for key in CUT_KEYS))
+        # the box lies on the frame the cut is counted from: the whole frame for the project crop, the picture that is
+        # left after it (the frame of the effects) for a Crop effect
+        self.frame = (project.width, project.height) if self.project_mode else (project.out_width, project.out_height)
+        self.box = CropBox(*self.frame)
+        if self.project_mode:
+            self.box.set_cuts(*project.cuts())
+        else:
+            layer = project.find(layer_id)
+            values = fx.get(layer.effects[index].effect_id).normalize(layer.effects[index].values)
+            self.box.set_cuts(*(values[key] for key in CUT_KEYS))
         self._image, self._image_size, self._bad = None, None, None   # picture, its size, error text
         self._timer = self._busy = self._want = None
+        self._detecting = False                                     # True while the Auto button's search runs
         self._lock = threading.Lock()                               # guards _want and _busy (worker thread <-> Tk)
-        self._ratios = self._ratio_list(project)
+        self._ratios = self._ratio_list(self.frame)
         self._colors()
         self._build()
         self._restore_ratio()
@@ -98,10 +117,13 @@ class CropAssist(Dialog):
         self.col_accent = resolve_color(self, "palette", "select_bg") or "#4b9eff"
 
     @staticmethod
-    def _ratio_list(project):
-        """@return [(text, width / height or None, config key)] for the ratio list: Free, Original, then the usual shapes"""
+    def _ratio_list(frame):
+        """
+        @param frame  (width, height) of the frame the box lies on
+        @return [(text, width / height or None, config key)] for the ratio list: Free, Original, then the usual shapes
+        """
         out = [(t("crop_assist.ratio_free"), None, "free"),
-               (t("crop_assist.ratio_original"), project.width / float(project.height), "original")]
+               (t("crop_assist.ratio_original"), frame[0] / float(frame[1]), "original")]
         return out + [("%d:%d" % shape, shape[0] / float(shape[1]), "%d:%d" % shape) for shape in RATIOS]
 
     def _build(self):
@@ -120,6 +142,10 @@ class CropAssist(Dialog):
         self.turn.pack(side="left")
         Tip(self.turn, "crop_assist.rotate_tip")
         ttk.Button(top, text=t("crop_assist.reset"), command=self._reset).pack(side="right")
+        if self.project_mode:                                       # black bars are found for the whole video only
+            self.auto = ttk.Button(top, text=t("crop_assist.auto"), command=self._auto)
+            self.auto.pack(side="right", padx=(0, 6))
+            Tip(self.auto, "crop_assist.auto_tip")
         self.canvas = tk.Canvas(frm, bg=self.col_back, highlightthickness=0, width=SIZE[0], height=SIZE[1])
         self.canvas.pack(fill="both", expand=True)
         for seq, command in (("<ButtonPress-1>", self._press), ("<B1-Motion>", self._drag),
@@ -137,8 +163,10 @@ class CropAssist(Dialog):
             ttk.Label(self.info, text=t("crop_assist.info_" + key), font=self._bold).pack(side="left")
             self.info_values[key] = ttk.Label(self.info, text="")
             self.info_values[key].pack(side="left", padx=(4, 16))
-        layer = self.app.project.find(self.layer_id)
-        if not layer.active_at(self.app.t, self.app.project):
+        self.note = ttk.Label(self.info, text="", foreground=self.col_err)   # result of the Auto button
+        self.note.pack(side="right")
+        layer = None if self.project_mode else self.app.project.find(self.layer_id)
+        if layer is not None and not layer.active_at(self.app.t, self.app.project):
             self.status = ttk.Label(frm, text=t("crop_assist.not_visible"), wraplength=SIZE[0], justify="left",
                                     foreground=self.col_err)
             self.status.pack(fill="x")
@@ -146,19 +174,19 @@ class CropAssist(Dialog):
             self.status = ttk.Frame(frm)
             self.status.pack(fill="x")
             ttk.Label(self.status, text=t("crop_assist.hint_title"), font=self._bold).pack(side="left")
-            ttk.Label(self.status, text=t("crop_assist.hint")).pack(side="left", padx=(4, 0))
+            ttk.Label(self.status, text=t("crop_assist.hint_video" if self.project_mode else "crop_assist.hint")
+                      ).pack(side="left", padx=(4, 0))
 
     # ------------------------------------------------------------------ #
     # Picture
     # ------------------------------------------------------------------ #
 
     def _picture_size(self):
-        """@return (width, height) of the picture that fits the drawing area (even, never above the project size)"""
-        project = self.app.project
+        """@return (width, height) of the picture that fits the drawing area (even, never above the frame the box lies on)"""
         cw, ch = max(self.canvas.winfo_width(), 64), max(self.canvas.winfo_height(), 64)
-        scale = min((cw - 2 * MARGIN) / float(project.width), (ch - 2 * MARGIN) / float(project.height), 1.0)
+        scale = min((cw - 2 * MARGIN) / float(self.frame[0]), (ch - 2 * MARGIN) / float(self.frame[1]), 1.0)
         scale = max(scale, 0.01)
-        return even(project.width * scale), even(project.height * scale)
+        return even(self.frame[0] * scale), even(self.frame[1] * scale)
 
     def _layout(self):
         """@return (x, y, width, height) of the picture on the canvas, centred"""
@@ -179,10 +207,14 @@ class CropAssist(Dialog):
 
     def _still_project(self):
         """
-        @return a copy of the project for the picture: the layer is on and the Crop effect has no cut, so the picture
-                is what the cut is made from (other effects stay as they are)
+        @return a copy of the project for the picture: for a Crop effect the layer is on and the effect has no cut, so
+                the picture is what the cut is made from (other effects stay as they are); for the project crop the
+                project has no crop, so the picture is the whole frame
         """
         project = copy.deepcopy(self.app.project)
+        if self.project_mode:
+            project.crop = (0, 0, 0, 0)
+            return project
         layer = project.find(self.layer_id)
         layer.enabled = True
         inst = layer.effects[self.index]
@@ -279,9 +311,14 @@ class CropAssist(Dialog):
         self._line((x1, my - bar, x1, my + bar), 4)
         self._update_info()
 
+    def _cuts(self):
+        """@return (left, right, top, bottom) of the box as they will be used: the project crop makes them even"""
+        cuts = self.box.cuts()
+        return normalize_cuts(cuts, *self.frame) if self.project_mode else cuts
+
     def _update_info(self):
         """Show the size, the place and the shape of the box."""
-        left, right, top, bottom = self.box.cuts()
+        left, right, top, bottom = self._cuts()
         width, height = self.box.width - left - right, self.box.height - top - bottom
         self.info_values["size"].configure(text="%dx%d" % (width, height))
         self.info_values["position"].configure(text="x:%d, y:%d" % (left, top))
@@ -369,8 +406,45 @@ class CropAssist(Dialog):
         self.box.reset()
         self._changed()
 
+    def _auto(self):
+        """The Auto button: look for black bars on pictures of the whole project, in a thread (it renders a few frames)."""
+        if self._detecting:
+            return
+        if not self.app.tools:
+            self.note.configure(text=t("msg.no_ffmpeg"))
+            return
+        self._detecting = True
+        self.auto.configure(state="disabled", text=t("crop_assist.auto_busy"))
+        project, tools = copy.deepcopy(self.app.project), self.app.tools
+
+        def work():
+            try:
+                cuts, error = autocrop.detect(tools, project), None
+            except (FFmpegError, CompileError) as exc:
+                cuts, error = None, str(exc)
+            self.app.inbox.put(lambda: self._detected(cuts, error))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _detected(self, cuts, error):
+        """Tk thread: the search is over; put the bars it found into the box (nothing found = the whole frame)."""
+        if not self.winfo_exists():
+            return
+        self._detecting = False
+        self.auto.configure(state="normal", text=t("crop_assist.auto"))
+        if error:
+            self.note.configure(text=error.splitlines()[-1] if error.strip() else error)
+        else:
+            self.box.set_cuts(*cuts)                                # the ratio becomes free: show it so
+            self.ratio_box.current(0)
+            self.note.configure(text="" if any(cuts) else t("crop_assist.auto_none"))
+        self._redraw()
+
     def _apply(self):
-        """Write the cuts into the effect (one undo step) and close."""
-        values = dict(zip(self.cut_keys, self.box.cuts()))
-        self.app.set_params(self.layer_id, self.index, values, enable=True)
+        """Write the cuts into the effect, or set the crop of the project (one undo step), and close."""
+        if self.project_mode:
+            self.app.set_crop(self.box.cuts())
+        else:
+            values = dict(zip(self.cut_keys, self.box.cuts()))
+            self.app.set_params(self.layer_id, self.index, values, enable=True)
         self.destroy()

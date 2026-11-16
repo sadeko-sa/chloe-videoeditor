@@ -231,6 +231,7 @@ class App:
         add(edit, "menu.redo", self.redo, "z", True)
         edit.add_separator()
         add(edit, "menu.project", lambda: self.project_settings())
+        add(edit, "menu.crop_video", self.crop_video)
         add(edit, "menu.duplicate", self.duplicate, "j")
         edit.add_separator()
         add(edit, "menu.goto", self.goto_dialog, "g")
@@ -451,21 +452,21 @@ class App:
 
     def _min_zoom(self):
         """Scale of the fitted picture (the smallest zoom)."""
-        return self.preview_size()[0] / float(self.project.width)
+        return self.preview_size()[0] / float(self.project.out_width)
 
     def _state(self):
         """@return (zoom, centre x, centre y) of the view now; the fitted picture counts as the lowest zoom"""
         p = self.project
         if self.zoom is None:
-            return self._min_zoom(), p.width / 2.0, p.height / 2.0
+            return self._min_zoom(), p.out_width / 2.0, p.out_height / 2.0
         return self.zoom, self.cx, self.cy
 
     def _clamp_view(self):
         """Keep the picture in view; on an axis where it is smaller than the area it stays centred."""
         p, (cw, ch) = self.project, self._canvas_size()
         hw, hh = cw / (2.0 * self.zoom), ch / (2.0 * self.zoom)
-        self.cx = p.width / 2.0 if p.width <= 2 * hw else min(max(self.cx, hw), p.width - hw)
-        self.cy = p.height / 2.0 if p.height <= 2 * hh else min(max(self.cy, hh), p.height - hh)
+        self.cx = p.out_width / 2.0 if p.out_width <= 2 * hw else min(max(self.cx, hw), p.out_width - hw)
+        self.cy = p.out_height / 2.0 if p.out_height <= 2 * hh else min(max(self.cy, hh), p.out_height - hh)
 
     def _sanitize_view(self):
         """Back to fit if the zoom is not above fit any more (window got bigger, project size changed)."""
@@ -482,9 +483,9 @@ class App:
         p, (cw, ch), z = self.project, self._canvas_size(), self.zoom
         self._clamp_view()
         hw, hh = cw / (2.0 * z) * 1.5, ch / (2.0 * z) * 1.5                 # a margin around the view: small moves need no new render
-        x0, x1 = max(0, int(math.floor(self.cx - hw))), min(p.width, int(math.ceil(self.cx + hw)))
-        y0, y1 = max(0, int(math.floor(self.cy - hh))), min(p.height, int(math.ceil(self.cy + hh)))
-        return (even(p.width), even(p.height)), (x0, y0, max(1, x1 - x0), max(1, y1 - y0), z)
+        x0, x1 = max(0, int(math.floor(self.cx - hw))), min(p.out_width, int(math.ceil(self.cx + hw)))
+        y0, y1 = max(0, int(math.floor(self.cy - hh))), min(p.out_height, int(math.ceil(self.cy + hh)))
+        return (even(p.out_width), even(p.out_height)), (x0, y0, max(1, x1 - x0), max(1, y1 - y0), z)
 
     def zoom_to(self, z, ax=None, ay=None, base=None):
         """
@@ -632,22 +633,24 @@ class App:
         menu.add_command(label=t("menu.goto"), accelerator=label + "+G", command=self.goto_dialog)
         menu.add_command(label=t("menu.export_frame"), accelerator=label + "+Shift+E", command=self.export_frame_dialog)
         menu.add_command(label=t("menu.project"), command=lambda: self.project_settings())
+        menu.add_command(label=t("menu.crop_video"), command=self.crop_video)
         try:
             menu.tk_popup(event.x_root, event.y_root)
         finally:
             menu.grab_release()
 
     def preview_size(self):
-        """@return (width, height) of the preview picture: the frame fitted into the area, never above the project size"""
+        """@return (width, height) of the preview picture: the picture fitted into the area, never above the project's
+        picture size (the frame without the crop)"""
         p = self.project
         cw, ch = self._canvas_size()
-        fit = min(cw / p.width, ch / p.height)
-        s = min(fit, self.cfg["preview_max"] / max(p.width, p.height), 1.0)
+        fit = min(cw / p.out_width, ch / p.out_height)
+        s = min(fit, self.cfg["preview_max"] / max(p.out_width, p.out_height), 1.0)
         if s == fit and s < 1.0:
             # limited by the area: round UP to the next even size (the canvas clips the extra pixel), rounding down
             # would leave a 1 px margin when the area has an odd size
-            return max(2, int(math.ceil(p.width * s / 2.0)) * 2), max(2, int(math.ceil(p.height * s / 2.0)) * 2)
-        return even(p.width * s), even(p.height * s)
+            return max(2, int(math.ceil(p.out_width * s / 2.0)) * 2), max(2, int(math.ceil(p.out_height * s / 2.0)) * 2)
+        return even(p.out_width * s), even(p.out_height * s)
 
     def request_preview(self, delay=50):
         """Show the picture at the current second after a short pause (many changes in a row render once)."""
@@ -944,6 +947,7 @@ class App:
             return
         layer.path, layer.source_duration = info.path, info.duration
         layer.has_audio, layer.is_image = info.has_audio, info.is_image
+        layer.width, layer.height = info.width, info.height
         self.cfg["last_dir"] = os.path.dirname(path)
         self.refresh_layers()
         self.refresh_inspector()
@@ -959,6 +963,28 @@ class App:
             if fps:
                 self.project.fps = fps
             self.touch()
+
+    def crop_video(self):
+        """Edit > Crop video: open the crop assist on the whole project (blocks until it is closed)."""
+        if not self.project.media_layers():
+            return
+        CropAssist(self, None, None)
+
+    def set_crop(self, cuts):
+        """
+        Set the crop of the project in one undo step. The picture, the preview and the export then have the size that
+        is left, so the frame size needs no change by hand.
+
+        @param cuts  (left, right, top, bottom) pixels of the project frame; made whole, even and usable by the project
+        """
+        before = self.project.cuts()
+        self.project.set_crop(*cuts)
+        if self.project.cuts() == before:
+            return
+        self.zoom = None                                            # the picture has another size: back to fit
+        self._apply_cursor()
+        self.refresh_inspector()                                    # the pixel sliders of effects run to the new size
+        self.touch()
 
     # ------------------------------------------------------------------ #
     # Effects

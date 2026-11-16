@@ -12,6 +12,13 @@ The picture is built bottom to top on a black frame:
   media layer       scale to the frame -> its effects -> opacity -> overlay on the picture so far
   adjustment layer  its effects run on the picture so far (a copy is blended back when the layer has
                     a time range or an opacity below 100%)
+
+The project crop (Project.crop) is cut off at the START of every media layer, before its effects, so nothing
+downstream (effects, blends, the encoder) ever handles a pixel that is thrown away. The black frame, the effects and
+the result have the size of what is left (Project.out_width x out_height): the frame follows the crop, like in HandBrake.
+FFmpeg's crop filter only moves the data pointers of a frame, it copies nothing. A file that has the size of the project
+frame is cut before it is scaled at all (see _cut_first()); any other file is fitted to the frame and cut straight
+after (see _fit_then_cut()). Without a crop the graph is exactly the one of a project without the feature.
 """
 
 from __future__ import annotations
@@ -137,14 +144,110 @@ def _wire(g: _Graph, source: str, steps: Sequence[_Step], ctx: RenderContext) ->
     return source
 
 
-def _fit(layer: MediaLayer, width: int, height: int) -> List[str]:
-    """@return filters that bring a media picture to the frame (converting RGB with the right matrix)"""
-    matrix = "out_color_matrix=" + color_matrix(height)
+def _fit(layer: MediaLayer, width: int, height: int, matrix_height: Optional[int] = None) -> List[str]:
+    """
+    @param matrix_height  height that decides the YUV matrix (the height of the finished picture); None = `height`
+    @return filters that bring a media picture to the frame (converting RGB with the right matrix)
+    """
+    matrix = "out_color_matrix=" + color_matrix(matrix_height or height)
     if layer.fit == "fill":
         return ["scale=%d:%d:force_original_aspect_ratio=increase:%s" % (width, height, matrix),
                 "crop=%d:%d" % (width, height), "setsar=1"]
     return ["scale=%d:%d:force_original_aspect_ratio=decrease:force_divisible_by=2:%s" % (width, height, matrix),
             "setsar=1"]
+
+
+@dataclass(frozen=True)
+class _Frame:
+    """
+    Where the project crop cuts, in the pixels of the picture that is being made (the export, or a smaller preview).
+
+    @param base_w  width of the frame the media layers are fitted into (the project frame, before the crop)
+    @param base_h  height of that frame
+    @param left    pixels cut from its left edge
+    @param right   pixels cut from its right edge
+    @param top     pixels cut from its top edge
+    @param bottom  pixels cut from its bottom edge
+    @param out_w   width of what is left (the picture that is made)
+    @param out_h   height of what is left
+    """
+    base_w: int
+    base_h: int
+    left: int
+    right: int
+    top: int
+    bottom: int
+    out_w: int
+    out_h: int
+
+    @property
+    def cut(self) -> bool:
+        """@return True if anything is cut"""
+        return bool(self.left or self.right or self.top or self.bottom)
+
+
+def _frame_for(project: Project, width: int, height: int) -> _Frame:
+    """
+    @param project  the project (its crop and frame)
+    @param width    width of the picture to make; the project's out_width in the export, less in a preview
+    @param height   height of the picture to make
+    @return         the frame plan; in a smaller picture the cuts are scaled the same way, so the preview shows the
+                    same cut as the export (the cut sides add up to the picture size again)
+    """
+    left, right, top, bottom = project.cuts()
+    if (width, height) != (project.out_width, project.out_height):
+        sx, sy = width / float(project.out_width), height / float(project.out_height)
+        left, right, top, bottom = (int(round(left * sx)), int(round(right * sx)),
+                                    int(round(top * sy)), int(round(bottom * sy)))
+    return _Frame(width + left + right, height + top + bottom, left, right, top, bottom, width, height)
+
+
+def _crop_to(frame: _Frame, safe: bool) -> str:
+    """
+    @param frame  the frame plan (must cut something)
+    @param safe   True = the picture the filter gets may be a pixel smaller than the frame (rounding when a file of
+                  nearly the frame's shape was fitted); the window is then kept inside the picture instead of
+                  failing. False = the picture is exactly the frame.
+    @return       the crop filter; exact, so no side is rounded to the chroma grid (every cut is even anyway)
+    """
+    if not safe:
+        return "crop=%d:%d:%d:%d:exact=1" % (frame.out_w, frame.out_h, frame.left, frame.top)
+    return "crop=w=%s:h=%s:x=%s:y=%s:exact=1" % (
+        quote("min(%d,iw-%d)" % (frame.out_w, frame.left)), quote("min(%d,ih-%d)" % (frame.out_h, frame.top)),
+        quote("min(%d,iw-ow)" % frame.left), quote("min(%d,ih-oh)" % frame.top))
+
+
+def _same_shape(layer: MediaLayer, frame: _Frame) -> bool:
+    """@return True if the file is known and is fitted to the frame without an empty margin (up to a pixel of rounding)"""
+    if not (layer.width and layer.height):
+        return False
+    return abs(frame.base_w * layer.height - layer.width * frame.base_h) <= max(layer.width, layer.height)
+
+
+def _cut_first(layer: MediaLayer, frame: _Frame) -> List[str]:
+    """
+    A file that has exactly the size of the frame (the usual one clip project, in the export): the cut is made on the
+    file's own pixels BEFORE any scaling, so the scaler and everything after it only see what is kept.
+
+    @return filters: cut, then the fit to the size that is left (the same size, so only the colour matrix is applied)
+    """
+    return [_crop_to(frame, False)] + _fit(layer, frame.out_w, frame.out_h)
+
+
+def _fit_then_cut(layer: MediaLayer, frame: _Frame) -> List[str]:
+    """
+    Any other file: fitted to the frame like without a crop, then cut. A file that does not fill the frame ("fit" with a
+    different shape) is centred with an empty margin that counts as already cut. To place it right whichever edges
+    are cut it is first padded to the whole frame with TRANSPARENT margins (so the layers beneath still show), then cut.
+
+    @return filters ending in a picture of exactly the size that is left
+    """
+    steps = _fit(layer, frame.base_w, frame.base_h, frame.out_h)
+    margin = layer.fit != "fill" and not _same_shape(layer, frame)
+    if margin:
+        steps += ["format=yuva420p",
+                  "pad=%d:%d:(ow-iw)/2:(oh-ih)/2:color=black@0" % (frame.base_w, frame.base_h)]
+    return steps + [_crop_to(frame, not margin)]
 
 
 def _opacity(layer: Layer) -> List[str]:
@@ -155,16 +258,23 @@ _OVERLAY = "overlay=x=(main_w-overlay_w)/2:y=(main_h-overlay_h)/2:eof_action=pas
 
 
 def _media_picture(g: _Graph, layer: MediaLayer, index: int, head: Sequence[str], tail: Sequence[str],
-                   ctx: RenderContext) -> str:
+                   ctx: RenderContext, frame: Optional[_Frame] = None) -> str:
     """
-    One media layer ready to be drawn: input -> head -> fit to the frame -> effects -> opacity -> tail.
+    One media layer ready to be drawn: input -> head -> project crop and fit to the frame -> effects -> opacity -> tail.
 
     @param index  number of the layer's input file
     @param head   filters before the fit (timestamps, frame rate)
     @param tail   filters after the opacity (time shift)
+    @param frame  where the project crop cuts; None or nothing cut = the fit of a project without a crop
     @return       label of the picture
     """
-    picture = g.chain(["%d:v" % index], list(head) + _fit(layer, ctx.width, ctx.height))
+    if frame is None or not frame.cut:
+        shape = _fit(layer, ctx.width, ctx.height)
+    elif layer.width == frame.base_w and layer.height == frame.base_h:
+        shape = _cut_first(layer, frame)
+    else:
+        shape = _fit_then_cut(layer, frame)
+    picture = g.chain(["%d:v" % index], list(head) + shape)
     picture = _wire(g, picture, _steps(layer, ctx), ctx)
     after = _opacity(layer) + list(tail)
     return g.chain([picture], after) if after else picture
@@ -210,8 +320,9 @@ def compile_export(project: Project) -> Job:
     total = project.duration()
     if total <= 0:
         raise CompileError("nothing to export")
-    width, height, fps = project.width, project.height, fps_text(project.fps)
+    width, height, fps = project.out_width, project.out_height, fps_text(project.fps)     # the picture after the crop
     ctx = RenderContext(width, height, 1.0)
+    frame = _frame_for(project, width, height)
     job, g = Job(duration=total), _Graph()
     current = g.chain([], _canvas(width, height, fps, total))
     sounds: List[str] = []
@@ -227,7 +338,7 @@ def compile_export(project: Project) -> Job:
                 seek = ["-ss", num(layer.in_point, 6)] if layer.in_point > 0 else []
                 job.inputs.append(seek + ["-t", num(layer.duration, 6), "-i", layer.path])
             shift = ["setpts=PTS+%s/TB" % num(layer.start, 6)] if layer.start > 0 else []
-            picture = _media_picture(g, layer, index, ["setpts=PTS-STARTPTS", "fps=" + fps], shift, ctx)
+            picture = _media_picture(g, layer, index, ["setpts=PTS-STARTPTS", "fps=" + fps], shift, ctx, frame)
             current = g.chain([current, picture], [_OVERLAY])
             if layer.has_audio and layer.volume > 0:
                 delay = int(round(layer.start * 1000))
@@ -281,13 +392,15 @@ def compile_frame(project: Project, layers: Sequence[Layer], t: float, size: Tup
 
     @param layers   layers to draw, bottom to top (already limited to those that are on at t)
     @param t        timeline second of the picture
-    @param size     (width, height) of the picture; smaller than the project for a preview
+    @param size     (width, height) of the picture; smaller than the project's picture (out_width x out_height, the
+                    frame without the crop) for a preview
     @param base     PNG of the picture beneath `layers` (a cached preview); None = black frame
     @param tap      if set, also output the picture after the first `tap` layers (as Job.prefix)
     @return         Job with the picture (and the prefix); inputs open only the one frame needed
     """
     width, height = even(size[0]), even(size[1])
-    ctx = RenderContext(width, height, width / project.width)
+    ctx = RenderContext(width, height, width / project.out_width)
+    frame = _frame_for(project, width, height)
     fps = fps_text(project.fps)
     job, g = Job(duration=1.0 / project.fps), _Graph()
     if base:
@@ -306,7 +419,7 @@ def compile_frame(project: Project, layers: Sequence[Layer], t: float, size: Tup
                 if layer.source_duration > 0:
                     local = min(local, max(layer.source_duration - 1.0 / project.fps, 0.0))
                 job.inputs.append(["-ss", num(local, 6), "-i", layer.path])
-            picture = _media_picture(g, layer, index, ["setpts=PTS-STARTPTS"], [], ctx)
+            picture = _media_picture(g, layer, index, ["setpts=PTS-STARTPTS"], [], ctx, frame)
             current = g.chain([current, picture], [_OVERLAY])
         else:
             steps = _steps(layer, ctx)

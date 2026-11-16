@@ -110,7 +110,7 @@ class ExportDialog(Dialog):
         self._tab_advanced()
 
         project = app.project
-        ttk.Label(frm, text=t("export.info", width=project.width, height=project.height,
+        ttk.Label(frm, text=t("export.info", width=project.out_width, height=project.out_height,
                               fps=fmt_number(project.fps, 3), seconds=fmt_number(project.duration(), 2))).grid(
             row=4, column=0, columnspan=3, sticky="w", pady=(8, 0))
         buttons_row(frm, ("btn.queue", lambda: self._ok("add")), ("btn.start", lambda: self._ok("start")),
