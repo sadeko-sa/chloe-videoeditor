@@ -432,7 +432,7 @@
   "tip.export.faststart": "Moves the file index to the front, so the video can start playing while it is still downloading. Only for MP4.",
   "tip.export.extra": "FFmpeg output options written like a command line, for example -g 240. They are added after all the options above, so they can override them.",
   "msg.extra_invalid": "The extra FFmpeg options are not valid (check the quotes).",
-  "msg.audio_copy_impossible": "The audio can only be copied when the project has exactly one clip with sound, at full volume, without denoise and starting at 0 s. Pick an audio codec instead.",
+  "msg.audio_copy_impossible": "The audio cannot be copied because no clip in the project has sound. Pick another audio option.",
   "btn.apply": "Apply",
   "btn.assist": "Assist...",
   "btn.assist.crop": "Crop assist...",

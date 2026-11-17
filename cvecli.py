@@ -537,8 +537,6 @@ def render(args: argparse.Namespace, tools: ff.Tools, report: Reporter) -> int:
         job = compile_export(project)
     except CompileError as exc:
         raise CliError(str(exc))
-    if options.audio == enc.COPY_AUDIO and not job.audio_source:
-        raise CliError("-E copy needs exactly one clip with sound that is not changed")
     export = ff.Export(tools, job, options, args.output, report.progress)
     if args.dry_run:
         report.commands(export.commands(args.output, args.threads))

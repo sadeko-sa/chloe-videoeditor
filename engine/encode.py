@@ -16,8 +16,8 @@ NO_AUDIO = "none"
 """Audio codec code of an export without sound."""
 
 COPY_AUDIO = "copy"
-"""Audio codec code of an export that copies the source audio as it is (no encoding). Only possible when the
-project has exactly one clip with sound that is not changed (see Job.audio_source)."""
+"""Audio codec code of an export that copies the source audio as it is (no encoding). Possible when the
+project has a clip with sound; the first one is copied and volume, denoise and delay are ignored (see Job.audio_source)."""
 
 RATE_QUALITY, RATE_BITRATE = "quality", "bitrate"
 """Rate control: constant quality (CRF) or average bitrate (optionally two-pass)."""

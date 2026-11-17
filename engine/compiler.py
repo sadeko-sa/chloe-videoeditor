@@ -40,16 +40,23 @@ class CompileError(Exception):
 class Job:
     """
     @param inputs    FFmpeg arguments of each input file, in input order (["-ss", "3", "-i", "a.mp4"], ...)
-    @param graph     the -filter_complex text
+    @param graph     the -filter_complex text (picture and sound chains together)
+    @param graph_video  only the picture chains of `graph`; use it when the sound is not mapped into the output
+                     (audio copy, no audio, first pass) because FFmpeg stops with "Filter ... has an unconnected output"
+                     if a filter output of the graph is not used
+    @param graph_audio  only the sound chains of `graph` ("" without sound); add it to `graph_video` when `audio` is mapped
     @param video     label of the finished picture
     @param audio     label of the mixed audio, None if there is none
-    @param audio_source  input arguments (["-ss", .., "-t", .., "-i", file]) of the one audio track that can be
-                     copied as it is (one clip with sound, volume 100 %, no denoise, starts at 0); None if not possible
+    @param audio_source  input arguments (["-ss", .., "-t", .., "-i", file]) of the audio track that "audio copy" writes
+                     as it is: the FIRST enabled clip with sound. Volume, denoise, start offset and other clips are
+                     ignored on purpose (copy means the source audio untouched); None only if no clip has sound
     @param prefix    label of the picture after the first `tap` layers (frame jobs only), else None
     @param duration  length of the result in seconds
     """
     inputs: List[List[str]] = field(default_factory=list)
     graph: str = ""
+    graph_video: str = ""
+    graph_audio: str = ""
     video: str = ""
     audio: Optional[str] = None
     audio_source: Optional[List[str]] = None
@@ -65,9 +72,11 @@ class Job:
 class _Graph(GraphBuilder):
     """Collects the chains of a filter graph and makes up the labels between them."""
 
-    def __init__(self):
+    def __init__(self, prefix: str = "n"):
+        """@param prefix  start of the labels this graph makes up (two graphs that are joined need different ones)"""
         self.chains: List[str] = []
         self._count = 0
+        self._prefix = prefix
 
     def chain(self, sources: Sequence[str], filters: Sequence[str]) -> str:
         """
@@ -78,14 +87,14 @@ class _Graph(GraphBuilder):
         @return         the label of its output
         """
         self._count += 1
-        out = "n%d" % self._count
+        out = "%s%d" % (self._prefix, self._count)
         self.chains.append("".join("[%s]" % s for s in sources) + ",".join(filters or ["null"]) + "[%s]" % out)
         return out
 
     def split(self, source: str, count: int = 2) -> List[str]:
         """@return `count` labels that all carry the picture of `source`"""
         self._count += 1
-        labels = ["n%d%s" % (self._count, chr(ord("a") + i)) for i in range(count)]
+        labels = ["%s%d%s" % (self._prefix, self._count, chr(ord("a") + i)) for i in range(count)]
         self.chains.append("[%s]split=%d%s" % (source, count, "".join("[%s]" % x for x in labels)))
         return labels
 
@@ -324,9 +333,10 @@ def compile_export(project: Project) -> Job:
     ctx = RenderContext(width, height, 1.0)
     frame = _frame_for(project, width, height)
     job, g = Job(duration=total), _Graph()
+    ag = _Graph("a")                    # the sound chains live in their own graph so they can be left out of a command
     current = g.chain([], _canvas(width, height, fps, total))
     sounds: List[str] = []
-    copyable: List[Optional[List[str]]] = []
+    copy_source: Optional[List[str]] = None     # first clip with sound, for "audio copy" (ignores volume/denoise/delay)
     for layer in project.layers:
         if not layer.enabled:
             continue
@@ -340,6 +350,8 @@ def compile_export(project: Project) -> Job:
             shift = ["setpts=PTS+%s/TB" % num(layer.start, 6)] if layer.start > 0 else []
             picture = _media_picture(g, layer, index, ["setpts=PTS-STARTPTS", "fps=" + fps], shift, ctx, frame)
             current = g.chain([current, picture], [_OVERLAY])
+            if layer.has_audio and not layer.is_image and copy_source is None:
+                copy_source = list(job.inputs[index])
             if layer.has_audio and layer.volume > 0:
                 delay = int(round(layer.start * 1000))
                 tail = ["adelay=%d|%d" % (delay, delay)] if delay else []
@@ -348,9 +360,7 @@ def compile_export(project: Project) -> Job:
                 # recording); the noise is tracked and its residue removed, so the floor is only the start value
                 amount = layer.audio_denoise
                 clean = ["afftdn=nr=%s:nf=%s:nt=w:tn=1:tr=1" % (num(max(amount * 30, 0.01), 2), num(-60 + 35 * amount, 1))] if amount > 0 else []
-                plain = layer.volume == 1.0 and amount <= 0 and delay == 0
-                copyable.append(list(job.inputs[index]) if plain else None)
-                sounds.append(g.chain(["%d:a" % index], [
+                sounds.append(ag.chain(["%d:a" % index], [
                     "asetpts=PTS-STARTPTS", "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo"]
                     + clean + ["volume=%s" % num(layer.volume)] + tail))
         else:
@@ -368,10 +378,10 @@ def compile_export(project: Project) -> Job:
     if len(sounds) == 1:
         job.audio = sounds[0]
     elif sounds:
-        job.audio = g.chain(sounds, ["amix=inputs=%d:normalize=0:duration=longest" % len(sounds)])
-    if len(sounds) == 1 and copyable and copyable[0]:
-        job.audio_source = copyable[0]
-    job.graph = g.text()
+        job.audio = ag.chain(sounds, ["amix=inputs=%d:normalize=0:duration=longest" % len(sounds)])
+    job.audio_source = copy_source
+    job.graph_video, job.graph_audio = g.text(), ag.text()
+    job.graph = ";".join(part for part in (job.graph_video, job.graph_audio) if part)
     return job
 
 

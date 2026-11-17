@@ -399,9 +399,6 @@ class ExportDialog(Dialog):
         except CompileError as exc:
             messagebox.showerror(t("dlg.error"), str(exc), parent=self)
             return
-        if options.audio == enc.COPY_AUDIO and not job.audio_source:
-            messagebox.showerror(t("dlg.error"), t("msg.audio_copy_impossible"), parent=self)
-            return
         try:
             app.jobs.add(Export(app.tools, job, options, path))
         except QueueError:

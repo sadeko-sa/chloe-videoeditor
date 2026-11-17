@@ -18,7 +18,7 @@ from fractions import Fraction
 from typing import Callable, Dict, FrozenSet, List, Optional, Tuple
 
 from .compiler import Job
-from .encode import COPY_AUDIO, VIDEO, ExportOptions, depth_of
+from .encode import COPY_AUDIO, NO_AUDIO, VIDEO, ExportOptions, depth_of
 from .project import IMAGE_EXTS, IMAGE_SECONDS, MediaInfo
 from .stamp import stamp
 
@@ -286,6 +286,10 @@ def render_frame(tools: Tools, job: Job, final: str, prefix: Optional[str] = Non
         raise FFmpegError(_tail(err))
 
 
+_FRAME_TIME = re.compile(r"showinfo.*?\bn:\s*\d+\s+pts:\s*-?\d+\s+pts_time:\s*(-?\d+(?:\.\d+)?)")
+"""One line of the showinfo filter in the first pass of a project without sound: the time of one frame."""
+
+
 class Export:
     """
     One export, run by the caller's thread (the job queue of engine/jobs.py runs it in a worker).
@@ -350,23 +354,27 @@ class Export:
         @raise ValueError if the extra options of the export cannot be split
         """
         job, o = self.job, self.options
-        graph, picture = job.graph, job.video
+        picture = job.video
+        # "audio copy" without any clip with sound is not an error: there is nothing to copy, so the file gets no audio
+        copy = o.audio == COPY_AUDIO and bool(job.audio_source)
+        # The sound chains are part of the graph only if the mixed sound is mapped into the output. With "audio copy"
+        # (the source stream is mapped instead), "no audio" or the first pass, an unused graph output would make FFmpeg
+        # stop with "Filter ... has an unconnected output" - so the sound chains are left out then.
+        mixed = bool(job.audio) and o.audio not in (COPY_AUDIO, NO_AUDIO)
+        picture_graph = job.graph_video or job.graph    # fallback: a job built without the split graphs
         if o.height:
-            graph += ";[%s]scale=-2:%d:flags=lanczos,setsar=1%s[%s]" % (
+            picture_graph += ";[%s]scale=-2:%d:flags=lanczos,setsar=1%s[%s]" % (
                 picture, o.height, ",setparams=" + job.tags if job.tags else "", _SCALED)
             picture = _SCALED
+        graph = picture_graph + (";" + job.graph_audio if mixed and job.graph_audio else "")
         limit = ["-threads:v", str(threads)] if threads > 0 else []
         head = _base(self.tools) + ["-progress", "pipe:1", "-nostats"]
         if threads > 0:
             head += ["-filter_complex_threads", str(threads)]
         for item in job.inputs:
             head += limit + item
-        copy = o.audio == COPY_AUDIO
-        if copy and not job.audio_source:
-            raise ValueError("the audio cannot be copied: it needs exactly one clip with sound, unchanged")
         if copy:
             head += job.audio_source                    # the same file once more, only for its audio stream
-        head += ["-filter_complex", graph, "-map", "[%s]" % picture]
         video, extra, length = o.video_args(threads), o.extra_args(), ["-t", "%.6f" % job.duration]
         if job.tags:                                    # same tags again as options (older FFmpeg reads these)
             tag = dict(item.split("=") for item in job.tags.split(":"))
@@ -374,16 +382,22 @@ class Export:
                       "-color_trc", tag["color_trc"], "-color_range", "tv"]
         if copy:
             audio = ["-map", "%d:a:0" % len(job.inputs)] + o.audio_args(True)
+        elif mixed:
+            audio = ["-map", "[%s]" % job.audio] + o.audio_args(True)
         else:
-            audio = (["-map", "[%s]" % job.audio] if job.audio else []) + o.audio_args(bool(job.audio))
-        final = head + video + o.container_args() + audio + extra
+            audio = o.audio_args(False)                 # -an
+        final = head + ["-filter_complex", graph, "-map", "[%s]" % picture] + video + o.container_args() + audio + extra
         if not o.two_pass:
             return [final + length + [target]]
         log = ["-passlogfile", self._pass_log(target)]
-        # The first pass writes no sound, but the audio output of the filter graph must still be connected
-        # (else FFmpeg stops with "Filter ... has output 0 unconnected"): map it and drop it into the null muxer.
-        sink = ["-map", "[%s]" % job.audio, "-c:a", "pcm_s16le"] if job.audio else ["-an"]
-        return [head + video + extra + ["-pass", "1"] + log + sink + length + ["-f", "null", "-"],
+        # The first pass is the same with or without sound: the picture only, no sound at all (-an), so no sound chain is
+        # in its graph and nothing is left unconnected. FFmpeg shows no time for the first pass of VP9 / AV1 (known
+        # FFmpeg bug, trac.ffmpeg.org tickets 9728, 9882 and 10165), so the pictures report their position themselves:
+        # the showinfo filter logs one line per real frame ("... pts_time:T", see _FRAME_TIME) and passes it on unchanged.
+        counted = picture + "_pos"
+        first = head + ["-loglevel", "info", "-filter_complex", "%s;[%s]showinfo[%s]" % (picture_graph, picture, counted),
+                        "-map", "[%s]" % counted]
+        return [first + video + extra + ["-pass", "1"] + log + ["-an"] + length + ["-f", "null", "-"],
                 final + ["-pass", "2"] + log + length + [target]]
 
     @staticmethod
@@ -434,10 +448,11 @@ class Export:
                 _suspend(proc, True)
         for line in proc.stdout:
             m = re.match(r"out_time_(?:us|ms)=(\d+)", line)
-            if m:
+            f = _FRAME_TIME.search(line)
+            if m or f:
                 if self.on_progress:
-                    done = min(int(m.group(1)) / 1e6 / self.job.duration, 1.0)
-                    self.on_progress(first + (last - first) * done)
+                    seconds = int(m.group(1)) / 1e6 if m else float(f.group(1))
+                    self.on_progress(first + (last - first) * max(min(seconds / self.job.duration, 1.0), 0.0))
             elif "=" not in line.split(" ")[0]:
                 lines.append(line)
         proc.wait()
