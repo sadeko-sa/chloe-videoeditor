@@ -13,12 +13,12 @@ import signal
 import subprocess
 import sys
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from typing import Callable, Dict, FrozenSet, List, Optional, Tuple
 
 from .compiler import Job
-from .encode import COPY_AUDIO, NO_AUDIO, VIDEO, ExportOptions, depth_of
+from .encode import AUDIO, COPY_AUDIO, NO_AUDIO, VIDEO, ExportOptions, copy_fallback, copy_fits, depth_of
 from .project import IMAGE_EXTS, IMAGE_SECONDS, MediaInfo
 from .stamp import stamp
 
@@ -214,6 +214,16 @@ def _rate(text: str) -> float:
     return value if 0 < value < 1000 else 0.0
 
 
+def audio_codec(tools: Tools, path: str) -> Optional[str]:
+    """@return FFmpeg name of the codec of the first audio stream of a file (e.g. "aac"); None if it cannot be probed"""
+    try:
+        name = run([tools.ffprobe, "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=codec_name",
+                    "-of", "csv=p=0", path], 30).strip()
+    except FFmpegError:
+        return None
+    return name or None
+
+
 def probe(tools: Tools, path: str) -> MediaInfo:
     """
     Read size, frame rate, length and sound of a media file.
@@ -381,6 +391,15 @@ class Export:
             video += ["-colorspace", tag["colorspace"], "-color_primaries", tag["color_primaries"],
                       "-color_trc", tag["color_trc"], "-color_range", "tv"]
         if copy:
+            # Audio copy writes the source audio without any change. If the container cannot take that codec (AAC
+            # into WebM, say) FFmpeg would only fail when it writes the header, which is after the whole first pass.
+            # So it is checked here, before anything runs, and then the same source audio is encoded unchanged
+            # (no volume, no denoise) with the codec the container takes instead.
+            codec = audio_codec(self.tools, job.audio_source[-1])
+            fits = copy_fits(o.container, codec)
+            if not fits:
+                other = copy_fallback(o.container, self.tools.encoders or None)
+                o = replace(o, audio=other, audio_bitrate=AUDIO[other].bitrate)
             audio = ["-map", "%d:a:0" % len(job.inputs)] + o.audio_args(True)
         elif mixed:
             audio = ["-map", "[%s]" % job.audio] + o.audio_args(True)

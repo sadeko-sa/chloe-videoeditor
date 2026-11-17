@@ -139,6 +139,26 @@ AUDIO: Dict[str, AudioCodec] = {
     "flac": AudioCodec("FLAC", "flac", ("mkv",), (), 0),
 }
 
+COPY_CODECS: Dict[str, Optional[frozenset]] = {
+    "mp4": frozenset(("aac", "mp3", "ac3", "eac3", "alac", "opus", "flac")),
+    "mkv": None,
+    "webm": frozenset(("opus", "vorbis")),
+}
+"""FFmpeg names of the audio codecs a container takes as they are (audio copy); None = every codec."""
+
+
+def copy_fits(container: str, codec: Optional[str]) -> bool:
+    """@return True if an audio stream of `codec` can be copied into `container` (also if the codec is unknown)"""
+    allowed = COPY_CODECS.get(container)
+    return allowed is None or not codec or codec in allowed
+
+
+def copy_fallback(container: str, encoders: Optional[AbstractSet[str]] = None) -> str:
+    """@return code of the audio codec that takes the place of a copy the container cannot take: Opus if it fits"""
+    found = audio_codecs(container, encoders) or audio_codecs(container)
+    return "opus" if "opus" in found else found[0]
+
+
 _BITRATE_ENCODERS_NEEDING_ZERO = ("libvpx-vp9", "libaom-av1")
 """Encoders that need -b:v 0 next to -crf to run in constant quality mode."""
 
