@@ -203,6 +203,16 @@ class Effect(ABC):
         values = values or {}
         return {p.key: p.coerce(values.get(p.key, p.default)) for p in self.params}
 
+    def uses_rgb(self, v: Mapping[str, Any], ctx: RenderContext) -> bool:
+        """
+        @param v    checked values of all parameters (see normalize)
+        @param ctx  picture the effect will run on
+        @return     True if the effect works on RGB (FFmpeg then converts the YUV picture to RGB and back). The
+                    compiler tells the conversions the colour matrix of the picture, because FFmpeg's default for
+                    RGB -> YUV is BT.601, which shifts the colours of every HD picture, even by a slider value of 1.
+        """
+        return False
+
     @abstractmethod
     def is_neutral(self, v: Mapping[str, Any], ctx: RenderContext) -> bool:
         """
@@ -224,6 +234,11 @@ class Effect(ABC):
         """
 
 
+_RGB_FILTERS = frozenset((
+    "lutrgb", "geq", "colorchannelmixer", "curves", "lut3d", "haldclut", "colorbalance", "colorlevels"))
+"""FFmpeg filters that only run on RGB pictures (a YUV picture is converted for them and back afterwards)."""
+
+
 class ChainEffect(Effect):
     """An effect that is one straight chain of FFmpeg filters; subclasses only write filters()."""
 
@@ -237,6 +252,10 @@ class ChainEffect(Effect):
 
     def is_neutral(self, v: Mapping[str, Any], ctx: RenderContext) -> bool:
         return not self.filters(v, ctx)
+
+    def uses_rgb(self, v: Mapping[str, Any], ctx: RenderContext) -> bool:
+        return any(f.split("=", 1)[0] in _RGB_FILTERS or f.startswith(("format=gbrp", "format=rgb"))
+                   for f in self.filters(v, ctx))
 
     def apply(self, g: GraphBuilder, source: str, v: Mapping[str, Any], ctx: RenderContext) -> str:
         return g.chain([source], self.filters(v, ctx))
@@ -269,10 +288,16 @@ class LatticeEffect(Effect):
                     change every color of the video
         """
 
+    def uses_rgb(self, v: Mapping[str, Any], ctx: RenderContext) -> bool:
+        return True
+
     def apply(self, g: GraphBuilder, source: str, v: Mapping[str, Any], ctx: RenderContext) -> str:
+        # haldclut gives wrong colors with planar gbrp pictures (a slider value of 1 turned the whole picture
+        # upside down); it is right with packed rgb24, so both the lattice and the picture are made rgb24 first
         lattice = g.chain([], ["haldclutsrc=level=%d:rate=1:duration=1" % self.lattice_level]
-                          + list(self.lattice_filters(v, ctx)))
-        return g.chain([source, lattice], ["haldclut=interp=tetrahedral"])
+                          + list(self.lattice_filters(v, ctx)) + ["format=rgb24"])
+        rgb = g.chain([source], ["format=rgb24"])
+        return g.chain([rgb, lattice], ["haldclut=interp=tetrahedral"])
 
 
 # --------------------------------------------------------------------------- #

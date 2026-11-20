@@ -143,11 +143,27 @@ def _steps(layer: Layer, ctx: RenderContext) -> List[_Step]:
     return out
 
 
+_EXACT = "flags=accurate_rnd+full_chroma_int"
+"""scale options for the conversion to and from RGB around an effect: exact rounding, full chroma resolution."""
+
+
 def _wire(g: _Graph, source: str, steps: Sequence[_Step], ctx: RenderContext) -> str:
-    """@return label of the picture after `steps` were added to the graph one after the other"""
+    """
+    @return label of the picture after `steps` were added to the graph one after the other. An effect that works on
+            RGB gets the picture converted to RGB with the colour matrix of the picture, and the result is converted
+            back to YUV with the same matrix. FFmpeg's own conversions in between assume BT.601 and ignore the tags
+            of the frame, which changed the colors of an HD picture as soon as one slider was moved by 1.
+    """
     for eff, values in steps:
         try:
+            rgb = eff.uses_rgb(values, ctx)
+            if rgb:
+                source = g.chain([source], ["scale=in_color_matrix=%s:in_range=tv:out_range=pc:%s"
+                                            % (color_matrix(ctx.height), _EXACT), "format=rgb24"])
             source = eff.apply(g, source, values, ctx)
+            if rgb:
+                source = g.chain([source], ["scale=in_range=pc:out_color_matrix=%s:out_range=tv:%s"
+                                            % (color_matrix(ctx.height), _EXACT), "format=yuv420p10le"])
         except Exception as exc:                                    # a plugin bug must not crash the program
             raise CompileError("%s: %s" % (eff.id, exc))
     return source
