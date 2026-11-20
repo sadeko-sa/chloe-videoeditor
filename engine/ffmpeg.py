@@ -299,6 +299,9 @@ def render_frame(tools: Tools, job: Job, final: str, prefix: Optional[str] = Non
 _FRAME_TIME = re.compile(r"showinfo.*?\bn:\s*\d+\s+pts:\s*-?\d+\s+pts_time:\s*(-?\d+(?:\.\d+)?)")
 """One line of the showinfo filter in the first pass of a project without sound: the time of one frame."""
 
+_OUT_TIME = re.compile(r"out_time_(?:us|ms)=(\d+)")
+"""A time line of the -progress output (microseconds). Both out_time_us and out_time_ms are sent in every block; a build can give the two different values, so a block is judged by all its time lines, see Export._run_pass."""
+
 
 class Export:
     """
@@ -465,19 +468,44 @@ class Export:
                                       universal_newlines=True, encoding="utf-8", errors="replace")
             if self._paused:
                 _suspend(proc, True)
+        reached = -1.0
+        block: List[float] = []
         for line in proc.stdout:
-            m = re.match(r"out_time_(?:us|ms)=(\d+)", line)
+            m = _OUT_TIME.match(line)
             f = _FRAME_TIME.search(line)
-            if m or f:
-                if self.on_progress:
-                    seconds = int(m.group(1)) / 1e6 if m else float(f.group(1))
-                    self.on_progress(first + (last - first) * max(min(seconds / self.job.duration, 1.0), 0.0))
+            if m:
+                block.append(int(m.group(1)) / 1e6)
+            elif f:
+                reached = self._report(float(f.group(1)), first, last, reached)
+            elif line.startswith("progress="):
+                if block:
+                    reached = self._report(max(block), first, last, reached)
+                block = []
             elif "=" not in line.split(" ")[0]:
                 lines.append(line)
         proc.wait()
         if self._cancelled or proc.returncode == 0:
             return None
         return _tail("".join(lines))
+
+    def _report(self, seconds: float, first: float, last: float, reached: float) -> float:
+        """
+        Tell on_progress how far the export is. The progress never goes back: a position behind the one already
+        reported is wrong (the two time lines of one FFmpeg progress block were seen to differ, which made the
+        percent jump between two values), so it is dropped.
+
+        @param seconds  position in the result
+        @param first    progress of the whole export when this command starts
+        @param last     progress of the whole export when it ends
+        @param reached  progress this command reported so far, -1 before the first report
+        @return         the progress reported so far, including this one
+        """
+        fraction = first + (last - first) * max(min(seconds / self.job.duration, 1.0), 0.0)
+        if fraction <= reached:
+            return reached
+        if self.on_progress:
+            self.on_progress(fraction)
+        return fraction
 
     def _clean_up(self, target: str) -> None:
         """Remove the temporary file and the first-pass statistics, whatever happened."""
