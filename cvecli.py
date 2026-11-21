@@ -33,6 +33,7 @@ from engine import ffmpeg as ff
 from engine.compiler import CompileError, compile_export
 from engine.config import load_config
 from engine.project import Project, ProjectError, load_project
+from engine.remaining import RecentPace
 
 EXIT_OK, EXIT_FAILED, EXIT_STOPPED = 0, 1, 130
 
@@ -276,9 +277,10 @@ class Reporter:
     The events, in the order they come: note (any number), start, progress (any number), then exactly one of
     done, stopped or error. Dry runs and the preset list send `commands` and `presets` instead.
 
-    Progress numbers (from progress(), see stats()): percent 0..100, elapsed seconds, eta seconds (None until 1 %
-    is done), speed (seconds of result made per second of work, None at the very start). A two-pass export counts
-    both passes, so its speed is half of what FFmpeg shows and the eta stays right.
+    Progress numbers (from progress(), see stats()): percent 0..100, elapsed seconds, eta seconds and speed (seconds
+    of result made per second of work), both None until a few seconds were measured. Eta and speed are those of the
+    last two minutes (see engine.remaining), so a second pass that is slower than the first is followed within that
+    time. A two-pass export counts both passes, so its speed is half of what FFmpeg shows.
     """
 
     interval = 0.5
@@ -289,19 +291,28 @@ class Reporter:
         self._began = clock()
         self._duration = 0.0
         self._last: Optional[float] = None
+        self._pace = RecentPace()
 
     def stats(self, fraction: float) -> Dict[str, Any]:
-        """@param fraction  0..1 of the whole export @return percent, elapsed, eta and speed as the class text says"""
+        """
+        Also remembers how far the export is now, for the speed of the last minutes.
+        @param fraction  0..1 of the whole export
+        @return          percent, elapsed, eta and speed as the class text says
+        """
         fraction = max(0.0, min(fraction, 1.0))
         elapsed = self._clock() - self._began
-        eta = elapsed * (1 - fraction) / fraction if fraction >= 0.01 else None
-        speed = fraction * self._duration / elapsed if fraction > 0 and elapsed > 0 else None
+        self._pace.add(elapsed, fraction)
+        eta = self._pace.remaining(elapsed, fraction)
+        rate = self._pace.rate(elapsed, fraction)
+        speed = rate * self._duration if rate is not None else None
         return {"percent": round(fraction * 100, 1), "elapsed": round(elapsed, 1),
                 "eta": None if eta is None else round(eta, 1), "speed": None if speed is None else round(speed, 2)}
 
     def start(self, source: str, target: str, summary: str, duration: float) -> None:
         """The export begins. @param duration  seconds of the result"""
         self._began, self._duration, self._last = self._clock(), duration, None
+        self._pace.clear()
+        self._pace.add(0.0, 0.0)
         self._start(source, target, summary, duration)
 
     def progress(self, fraction: float) -> None:

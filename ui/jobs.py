@@ -333,8 +333,7 @@ class JobsWindow(tk.Toplevel):
         self.empty_label.pack_forget()
         self.detail_frame.pack(fill="both", expand=True)
         export, elapsed = job.export, job.elapsed
-        remaining = elapsed * (1 - job.progress) / job.progress if job.state is JobState.RUNNING and job.progress >= 0.01 \
-            else None
+        remaining = job.remaining
         size = os.path.getsize(job.out_path) if job.state is JobState.DONE and os.path.exists(job.out_path) else None
         values = {
             "file": job.out_path,

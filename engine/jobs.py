@@ -10,10 +10,11 @@ import itertools
 import os
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple
 
 from .ffmpeg import Export
+from .remaining import RecentPace
 
 WORKERS_RANGE = (1, 8)
 """Allowed number of exports rendered at the same time."""
@@ -60,6 +61,7 @@ class ExportJob:
     @param finished  time.monotonic() when it ended, 0 = not yet
     @param paused_at     time.monotonic() when the current pause began, 0 = not paused
     @param paused_total  seconds spent paused before the current pause
+    @param _pace  the speed of the last seconds, for `remaining`
     """
     id: int
     export: Export
@@ -71,6 +73,7 @@ class ExportJob:
     finished: float = 0.0
     paused_at: float = 0.0
     paused_total: float = 0.0
+    _pace: RecentPace = field(default_factory=RecentPace, init=False, repr=False, compare=False)
 
     @property
     def elapsed(self) -> float:
@@ -97,7 +100,28 @@ class ExportJob:
         return os.path.basename(self.export.out_path)
 
     def set_progress(self, fraction: float) -> None:
+        """
+        Take a new progress and remember it with the time it was reached, for `remaining`.
+        @param fraction  0..1
+        """
         self.progress = fraction
+        self._pace.add(self.elapsed, fraction)
+
+    def reset_progress(self) -> None:
+        """Back to 0 with no speed measured, for a job that runs again."""
+        self._pace.clear()
+        self.progress = 0.0
+
+    @property
+    def remaining(self) -> Optional[float]:
+        """
+        Time left at the speed of the last seconds (see RecentPace). Time spent paused is not counted, as `elapsed`
+        leaves it out.
+        @return seconds, None if the job does not run or has not rendered long enough to tell
+        """
+        if self.state is not JobState.RUNNING:
+            return None
+        return self._pace.remaining(self.elapsed, self.progress)
 
 
 def _same_file(a: str, b: str) -> bool:
@@ -323,7 +347,8 @@ class JobQueue:
             if any(j is not job and j.state.active and _same_file(j.out_path, job.out_path) for j in self._jobs):
                 raise QueueError(job.out_path)
             job.export.reset()
-            job.state, job.error, job.progress, job.worker = JobState.QUEUED, "", 0.0, 0
+            job.state, job.error, job.worker = JobState.QUEUED, "", 0
+            job.reset_progress()
             job.started = job.finished = job.paused_at = job.paused_total = 0.0
             self._spawn_locked()
             self._cond.notify()

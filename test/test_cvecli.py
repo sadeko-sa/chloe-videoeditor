@@ -136,6 +136,37 @@ def test_progress_numbers():
     assert report.stats(5.0)["percent"] == 100.0 and report.stats(-1)["percent"] == 0.0
 
 
+def test_eta_follows_a_second_pass_that_is_much_slower():
+    """The log of a Kaggle run: pass 1 took a few minutes, pass 2 is far slower, the eta must not stay at pass 1's speed."""
+    clock = Clock()
+    report = cli.JsonReporter(io.StringIO(), clock)
+    report.start("a.mp4", "b.mp4", "summary", 1000.0)
+    fraction = 0.0
+    for gain, seconds in ((0.005, 100), (0.0005, 300)):         # half of the work in 100 s, then ten times slower
+        for _ in range(seconds):
+            clock.now += 1
+            fraction += gain
+            stats = report.stats(fraction)
+    assert stats["percent"] == 65.0
+    assert stats["eta"] == pytest.approx(700.0)                 # the average over the whole run would say 215
+    assert stats["speed"] == pytest.approx(0.5)                 # 0.0005 of 1000 s of result per second
+
+
+def test_no_eta_and_speed_before_a_few_seconds_are_measured_or_without_progress():
+    """Too little data and no progress give None for both; they come with the first progress after a few seconds."""
+    clock = Clock()
+    report = cli.JsonReporter(io.StringIO(), clock)
+    report.start("a.mp4", "b.mp4", "summary", 60.0)
+    clock.now += 1
+    s = report.stats(0.1)
+    assert s["eta"] is None and s["speed"] is None
+    clock.now += 10
+    s = report.stats(0.0)
+    assert s["eta"] is None and s["speed"] is None
+    s = report.stats(0.1)
+    assert s["eta"] == pytest.approx(99.0) and s["speed"] == pytest.approx(0.55)
+
+
 def test_progress_is_throttled():
     clock, out = Clock(), io.StringIO()
     report = cli.JsonReporter(out, clock)
