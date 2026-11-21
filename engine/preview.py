@@ -25,8 +25,9 @@ import threading
 from collections import OrderedDict
 from typing import Callable, List, Optional, Tuple
 
+from . import userdata
 from .compiler import CompileError, compile_frame
-from .ffmpeg import APP_DIR, FFmpegError, Tools, _base, _tail, popen, render_frame
+from .ffmpeg import FFmpegError, Tools, _base, _tail, popen, render_frame
 from .project import Layer, MediaLayer, Project, even
 
 CACHE_ENTRIES = 80
@@ -47,8 +48,8 @@ with this mark are removed as leftovers, so nothing else that lives there is eve
 
 
 def default_root() -> str:
-    """@return the cache folder next to the program (used when the user picked none, or the picked one fails)"""
-    return os.path.join(APP_DIR, "cache")
+    """@return the user data folder itself (used when the user picked no cache folder, or the picked one fails)"""
+    return userdata.userdata_dir()
 
 
 def cache_root(root_dir: str = "") -> str:
@@ -61,7 +62,7 @@ def cache_root(root_dir: str = "") -> str:
 
 def _make_folder(root_dir: str = "") -> str:
     """
-    @param root_dir  folder picked by the user to hold the cache; empty = cache/ in the program folder
+    @param root_dir  folder picked by the user to hold the cache; empty = the user data folder
     @return a new empty cache folder (run_...) inside that folder, after removing the leftovers of crashed
             runs; if the picked folder cannot be used the program folder (cache/) is tried, and the system
             temp folder (AppData on Windows) is only the last fallback
@@ -74,8 +75,8 @@ def _make_folder(root_dir: str = "") -> str:
             os.makedirs(root, exist_ok=True)
             for name in os.listdir(root):
                 old = os.path.join(root, name)
-                # the program's own folder only holds our run_ folders; elsewhere only marked ones are ours
-                if name.startswith("run_") and (root == default_root() or os.path.exists(os.path.join(old, RUN_MARK))):
+                # the user data folder holds the user's own files too, so only run_ folders with our mark are ours
+                if name.startswith("run_") and os.path.exists(os.path.join(old, RUN_MARK)):
                     shutil.rmtree(old, ignore_errors=True)
             folder = tempfile.mkdtemp(prefix="run_", dir=root)
             with open(os.path.join(folder, RUN_MARK), "w"):
@@ -92,7 +93,7 @@ class FrameCache:
     def __init__(self, limit: int = CACHE_ENTRIES, root: str = ""):
         """
         @param limit  most pictures kept
-        @param root   folder picked by the user to hold the cache; empty = cache/ in the program folder
+        @param root   folder picked by the user to hold the cache; empty = the user data folder
         """
         self.limit = limit
         self.folder = _make_folder(root)
@@ -173,7 +174,7 @@ class PreviewEngine:
         @param tools      the FFmpeg programs, None if not found
         @param deliver    called in the worker thread with the answer of a request: (seq, png path or None, error or
                           None, final); final is False for the quick picture of a zoomed request, True for the last one
-        @param cache_dir  folder picked by the user to hold the cache; empty = cache/ in the program folder
+        @param cache_dir  folder picked by the user to hold the cache; empty = the user data folder
         """
         self.tools, self.deliver = tools, deliver
         self.cache_dir = cache_dir                                  # as picked by the user (see set_cache_dir)
@@ -217,11 +218,12 @@ class PreviewEngine:
         """
         Move the cache to another folder. The pictures cached so far are dropped, the next request renders again.
 
-        @param cache_dir  folder picked by the user; empty = cache/ in the program folder
+        @param cache_dir  folder picked by the user; empty = the user data folder
         @return           True if the cache was moved, False if that folder is the one in use already
         """
         with self._cond:
-            if cache_root(cache_dir) == cache_root(self.cache_dir):
+            # compared with the folder really in use: an empty setting follows the user data folder when that moves
+            if cache_root(cache_dir) == os.path.dirname(os.path.abspath(self.cache.folder)):
                 return False
             old, self.cache, self.cache_dir = self.cache, FrameCache(root=cache_dir), cache_dir
             self._full.clear()

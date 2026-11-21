@@ -6,16 +6,21 @@ import os
 import struct
 import subprocess
 import sys
+import time
 import tkinter as tk
+import traceback
 import zlib
 from tkinter import ttk
 
 from lang import t
 from theme import resolve_color
 
+from engine import userdata
 from engine.ffmpeg import IS_WIN
 
 IS_MAC = sys.platform == "darwin"
+ERROR_LOG = "error.log"
+"""File name of the error log in the user data folder."""
 MOD = "Command" if IS_MAC else "Control"
 """Tk name of the key for shortcuts: Cmd on macOS, else Ctrl."""
 MOD_LABEL = "Cmd" if IS_MAC else "Ctrl"
@@ -140,6 +145,68 @@ def win_setup():
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("ChloeVideoeditor")
     except Exception:
         pass
+
+
+_log_folder = ""
+"""Folder of error.log as set by set_log_folder(); empty = the user data folder."""
+
+
+def set_log_folder(folder):
+    """
+    Choose the folder of error.log: the cache folder of the config (empty = the user data folder).
+
+    @param folder  folder of the log; "" = the user data folder
+    """
+    global _log_folder
+    _log_folder = folder or ""
+
+
+def write_error_log(text, folder=None):
+    """
+    Append a time stamped text to error.log; a failure to write is ignored.
+
+    @param text    what to write (a traceback, ...)
+    @param folder  folder of the log; None = the folder set by set_log_folder(), else the user data folder
+                   (made if it is missing)
+    """
+    try:
+        folder = folder or _log_folder or userdata.userdata_dir()
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, ERROR_LOG), "a", encoding="utf-8") as f:
+            f.write("[%s]\n%s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), text.rstrip()))
+    except OSError:
+        pass
+
+
+def install_error_log():
+    """Send unhandled exceptions of the main thread and of worker threads to error.log (there is no console)."""
+    def hook(kind, value, tb):
+        write_error_log("".join(traceback.format_exception(kind, value, tb)))
+
+    sys.excepthook = hook
+    try:
+        import threading
+        threading.excepthook = lambda a: hook(a.exc_type, a.exc_value, a.exc_traceback)
+    except AttributeError:                                  # Python 3.7
+        pass
+
+
+def open_path(target):
+    """
+    Open a file or folder with the program of the system.
+
+    @param target  path to open
+    @return        False if that failed
+    """
+    try:
+        if IS_WIN:
+            os.startfile(target)
+        else:
+            subprocess.Popen(["open" if IS_MAC else "xdg-open", target], stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+        return True
+    except OSError:
+        return False
 
 
 def bind_shortcut(widget, char, command):

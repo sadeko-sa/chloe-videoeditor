@@ -275,7 +275,7 @@
   "menu.recent_clear": "履歴を消去",
   "msg.recent_missing": "{name} は存在しません。最近使った項目から削除しました。",
   "field.cache_dir": "キャッシュフォルダ",
-  "hint.cache_dir": "一時キャッシュ用のフォルダーです。空欄にすると、アプリケーションのルートフォルダーを使用します。",
+  "hint.cache_dir": "一時キャッシュ用のフォルダーです。空欄にすると、ユーザーデータフォルダーを使用します。",
   "dlg.pick_cache": "キャッシュフォルダを選択",
   "about.cache": "キャッシュフォルダ",
   "menu.language": "Language (言語)",
@@ -468,5 +468,13 @@
   "exists.ask": "置き換える前に確認する",
   "exists.replace": "置き換える",
   "exists.number": "両方残す: 新しい名前に番号を付ける",
-  "msg.output_is_input": "{name} はプロジェクトで使用中のため、書き出しで置き換えられません。別の名前を選んでください。"
+  "msg.output_is_input": "{name} はプロジェクトで使用中のため、書き出しで置き換えられません。別の名前を選んでください。",
+  "about.userdata": "ユーザーデータフォルダ",
+  "field.userdata_dir": "ユーザーデータフォルダ",
+  "hint.userdata_dir": "空欄にすると、OSのユーザーフォルダーを使用します。",
+  "dlg.pick_userdata": "ユーザーデータフォルダを選択",
+  "btn.open": "開く",
+  "msg.open_failed": "フォルダを開けませんでした:\n{error}",
+  "check.effect_override": "同じIDの内蔵エフェクトを自分のエフェクトで置き換える",
+  "msg.restart_effects": "保存しました。ユーザーデータフォルダのエフェクトは再起動後に読み込まれます。今すぐ再起動しますか?"
 }

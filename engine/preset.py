@@ -16,11 +16,17 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, List, Optional
 
 from . import effect as fx
-from .ffmpeg import APP_DIR
+from . import userdata
 from .project import EffectInstance
 
 CATEGORY = "effect"
-PRESET_DIR = os.path.join(APP_DIR, "preset")
+PRESET_DIR_NAME = "preset"
+"""Name of the folder (inside the user data folder) that holds the preset files."""
+
+
+def preset_dir() -> str:
+    """@return the folder of the preset files: preset/ in the user data folder (it may not exist yet)"""
+    return os.path.join(userdata.userdata_dir(), PRESET_DIR_NAME)
 
 
 class PresetError(Exception):
@@ -60,7 +66,11 @@ class EffectPreset:
 
 
 def preset_path(category: str = CATEGORY) -> str:
-    return os.path.join(PRESET_DIR, category + ".json")
+    """
+    @param category  name of the preset file without .json
+    @return          full path of that preset file in preset_dir()
+    """
+    return os.path.join(preset_dir(), category + ".json")
 
 
 INDENT = "\t"

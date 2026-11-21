@@ -1,6 +1,7 @@
 """
-config.py - The program settings as one JSON file (config.json) next to the program (no Tk in here).
-Nothing is ever written to AppData, ~/.config or similar. No other file name is read.
+config.py - The program settings as one JSON file (config.json) in the user data folder (no Tk in here).
+The user data folder is the settings folder of the operating system for this program, or the folder the user chose
+(see engine/userdata.py, which also keeps the small userdata.json that remembers the choice). No other file name is read.
 """
 
 from __future__ import annotations
@@ -9,19 +10,19 @@ import json
 import os
 from typing import Any, Dict, List
 
+from . import userdata
 from .encode import ExportOptions
-from .ffmpeg import APP_DIR
 from .jobs import THREADS_RANGE, WORKERS_RANGE
 from .naming import COLLISIONS, DEFAULT_FORMAT
 
 CONFIG_NAME = "config.json"
-"""File name of the config in the program folder (no fallback to any older name)."""
+"""File name of the config in the user data folder (no fallback to any older name)."""
 
 DEFAULTS: Dict[str, Any] = {
     "language": "", "theme": "", "geometry": "1280x800", "zoomed": False,
     "ffmpeg": "", "preview_max": 1280, "last_dir": "",
     "export": {}, "output_dir": "", "name_format": DEFAULT_FORMAT, "on_exists": "ask",
-    "cache_dir": "", "recent": [],
+    "cache_dir": "", "recent": [], "effect_override": False,
     "workers": 1, "worker_threads": 0, "goto_field": "time", "crop_ratio": "free",
 }
 """Config entries and defaults. "ffmpeg" = path of ffmpeg or its folder (empty = search);
@@ -30,7 +31,8 @@ DEFAULTS: Dict[str, Any] = {
 "output_dir" = default folder of exports (empty = the folder of the first video of the project);
 "name_format" = file name of an export with {tokens} (see engine/naming.py);
 "on_exists" = what to do when the output file exists: "ask", "replace" or "number" (see engine/naming.py COLLISIONS);
-"cache_dir" = folder that holds the preview cache (empty = cache/ in the program folder);
+"cache_dir" = folder that holds the preview cache (empty = cache/ in the user data folder);
+"effect_override" = True lets an effect of the user's effect/ folder replace a built-in effect that has the same id (False = such a file is rejected);
 "recent" = project files opened or saved last, newest first (at most RECENT_MAX);
 "workers" = number of job queue workers (jobs rendered at the same time); "worker_threads" = thread limit of each job (0 = auto);
 "goto_field" = field of the Go to time / frame dialog that had the focus when it was closed ("time" or "frame");
@@ -43,8 +45,8 @@ PREVIEW_RANGE = (320, 3840)
 
 
 def config_path() -> str:
-    """@return full path of the config file (in the program folder)"""
-    return os.path.join(APP_DIR, CONFIG_NAME)
+    """@return full path of the config file (in the user data folder, see engine.userdata.userdata_dir())"""
+    return os.path.join(userdata.userdata_dir(), CONFIG_NAME)
 
 
 def _clamp(value: Any, lo: int, hi: int, default: int) -> int:
@@ -97,14 +99,17 @@ def load_config() -> Dict[str, Any]:
         cfg["on_exists"] = DEFAULTS["on_exists"]
     cfg["export"] = ExportOptions.from_dict(cfg["export"]).to_dict()
     cfg["zoomed"] = bool(cfg["zoomed"])
+    cfg["effect_override"] = cfg["effect_override"] is True
     if cfg["goto_field"] not in ("time", "frame"):
         cfg["goto_field"] = DEFAULTS["goto_field"]
     return cfg
 
 
 def save_config(cfg: Dict[str, Any]) -> None:
-    """Write the config (temporary file first). @raise OSError if it cannot be written"""
+    """Write the config (temporary file first); the user data folder is made if it is missing.
+    @raise OSError if it cannot be written"""
     path = config_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path + ".tmp", "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2, ensure_ascii=False)
         f.write("\n")

@@ -2,7 +2,8 @@
 effect.py - Everything an effect plugin needs, in one place: Param, RenderContext, GraphBuilder,
 Effect, ChainEffect, the registry and the plugin loader.
 
-An effect is one small class in a module of the effect/ folder; nothing else has to change. Most
+An effect is one small class in a module of the effect/ folder of the program or of the effect/ folder in the user
+data folder (engine/userdata.py); nothing else has to change. Most
 effects are one straight chain of FFmpeg filters and extend ChainEffect:
 
     from engine.effect import ChainEffect, Param, register, num
@@ -39,13 +40,16 @@ Optional texts in lang/<code>.json (the English name and labels above are the fa
 from __future__ import annotations
 
 import importlib
+import importlib.util
+import os
 import pkgutil
 import re
+import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, ClassVar, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from . import curve
+from . import curve, userdata
 
 KINDS = ("float", "int", "bool", "choice", "curve")
 """
@@ -306,6 +310,15 @@ class LatticeEffect(Effect):
 
 _effects: Dict[str, Effect] = {}
 _load_errors: List[str] = []
+_overrides: List[str] = []
+_allow_override: bool = False
+
+EFFECT_DIR_NAME = "effect"
+"""Name of the folder (inside the user data folder) that holds the user's own effects; no plural."""
+
+MODULE_PREFIX = "chloe_effect_"
+"""Prefix of the module name every file of the user's effect folder gets (so two files never clash with each other
+or with the built-in effect package, and a reload replaces the old module)."""
 
 
 def register(cls):
@@ -318,7 +331,9 @@ def register(cls):
     if len(keys) != len(set(keys)):
         raise EffectError("%s: duplicate parameter keys" % cls.__name__)
     if cls.id in _effects:
-        raise EffectError("effect id %r is used twice" % cls.id)
+        if not _allow_override:
+            raise EffectError("effect id %r is used twice" % cls.id)
+        _overrides.append(cls.id)
     _effects[cls.id] = cls()
     return cls
 
@@ -346,6 +361,76 @@ def load_errors() -> List[str]:
     return list(_load_errors)
 
 
+def overrides() -> List[str]:
+    """@return ids of built-in effects that a user folder replaced"""
+    return list(_overrides)
+
+
+def effect_dir() -> str:
+    """@return the folder of the user's own effects: effect/ in the user data folder (it may not exist yet)"""
+    return os.path.join(userdata.userdata_dir(), EFFECT_DIR_NAME)
+
+
+def discover_folder(folder: str, override: bool = False) -> int:
+    """
+    Import every .py file of a plain folder (no __init__.py needed) so its effects register. Same rules as
+    discover(): a file whose name starts with "_" or "." is a helper and never loaded, and a broken file is skipped
+    and reported by load_errors() while the others still load. A file loads completely or not at all: the effects
+    it registered before it failed are taken back.
+
+    @param folder    folder that holds the plugin files; a missing folder is not an error
+    @param override  True = an effect with the id of an already registered one replaces it (see overrides());
+                     False = such a file is rejected like a duplicate id inside one folder
+    @return          number of registered effects
+    """
+    global _allow_override
+    try:
+        names = sorted(os.listdir(folder))
+    except OSError:
+        return len(_effects)
+    _allow_override = override
+    try:
+        for file_name in names:
+            path = os.path.join(folder, file_name)
+            if not file_name.lower().endswith(".py") or file_name.startswith((".", "_")) or not os.path.isfile(path):
+                continue
+            stem = os.path.splitext(file_name)[0]
+            module_name = MODULE_PREFIX + "".join(c if c.isalnum() else "_" for c in stem)
+            before, marks = dict(_effects), len(_overrides)
+            sys.modules.pop(module_name, None)
+            try:
+                spec = importlib.util.spec_from_file_location(module_name, path)
+                module = importlib.util.module_from_spec(spec)
+                sys.modules[module_name] = module                   # dataclasses and pickling look the module up here
+                with open(path, "r", encoding="utf-8") as f:        # no .pyc cache: a file edited a moment ago is read again
+                    code = compile(f.read(), path, "exec")
+                exec(code, module.__dict__)
+            except (Exception, SystemExit) as exc:                  # a plugin must never stop the program
+                sys.modules.pop(module_name, None)
+                _effects.clear()
+                _effects.update(before)
+                del _overrides[marks:]
+                _load_errors.append("%s: %s" % (path, exc))
+    finally:
+        _allow_override = False
+    return len(_effects)
+
+
+def discover_user(override: bool = False) -> int:
+    """
+    Load the user's own effects from effect/ in the user data folder (see effect_dir()). When the user data folder
+    is the program folder (the layout of older versions) that folder is the built-in effect package itself and is
+    not loaded a second time.
+
+    @param override  see discover_folder()
+    @return          number of registered effects
+    """
+    folder = effect_dir()
+    if os.path.normcase(os.path.abspath(folder)) == os.path.normcase(os.path.abspath(os.path.join(userdata.APP_DIR, "effect"))):
+        return len(_effects)
+    return discover_folder(folder, override)
+
+
 def discover(package: str = "effect") -> int:
     """
     Import every module of the plugin package so its effects register. A broken module is skipped
@@ -355,6 +440,7 @@ def discover(package: str = "effect") -> int:
     @return         number of registered effects
     """
     _load_errors.clear()
+    _overrides.clear()
     try:
         pkg = importlib.import_module(package)
     except ImportError as exc:

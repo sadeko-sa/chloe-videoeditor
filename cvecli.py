@@ -27,7 +27,7 @@ import time
 from dataclasses import fields, replace
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, TextIO, Tuple
 
-from engine import APP_NAME, VERSION, autocrop, effect
+from engine import APP_NAME, VERSION, autocrop, effect, userdata
 from engine import encode as enc
 from engine import ffmpeg as ff
 from engine.compiler import CompileError, compile_export
@@ -575,8 +575,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         parser.error("-i / --input and -o / --output are required")
     report = JsonReporter() if args.json else TextReporter(args.quiet, step=args.progress_step)
     try:
+        userdata.init()
         cfg = load_config()
         effect.discover()
+        effect.discover_user(cfg["effect_override"])
         tools = ff.locate(args.ffmpeg or cfg["ffmpeg"])
         if tools is None:
             raise CliError("FFmpeg not found: put it on PATH or use --ffmpeg")

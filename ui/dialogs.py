@@ -5,7 +5,7 @@ import os
 import sys
 import tkinter as tk
 from dataclasses import replace
-from tkinter import filedialog, ttk
+from tkinter import filedialog, messagebox, ttk
 
 from lang import list_languages, resolve_language, t
 from theme import ThemeDialog, list_themes, resolve_theme
@@ -13,11 +13,11 @@ from theme import ThemeDialog, list_themes, resolve_theme
 from engine import APP_NAME, VERSION
 from engine import effect as fx
 from engine import encode as enc
-from engine import naming
+from engine import naming, preview, userdata
 from engine.config import PREVIEW_RANGE, config_path
 from engine.jobs import THREADS_RANGE, WORKERS_RANGE
 from engine.project import even
-from ui.common import Dialog, fmt_number, fmt_time, ok_cancel, parse_time
+from ui.common import Dialog, fmt_number, fmt_time, ok_cancel, open_path, parse_time
 
 
 def _int(text, lo, hi, default):
@@ -42,7 +42,7 @@ def build_about(page, app):
             (t("about.dnd"), t("about.dnd_on") if app.dnd_ok else t("about.dnd_off")),
             (t("about.ffmpeg"), "%s (%s)" % (tools.version, tools.ffmpeg) if tools else t("about.missing")),
             (t("about.effects"), str(len(fx.all_effects()))),
-            (t("about.config"), config_path()),
+            (t("about.userdata"), userdata.userdata_dir()), (t("about.config"), config_path()),
             (t("about.cache"), os.path.dirname(app.engine.cache.folder))]
     errors = fx.load_errors()
     if errors:
@@ -115,14 +115,30 @@ class SettingsDialog(Dialog):
         self.preview_var = tk.StringVar(value=str(cfg["preview_max"]))
         ttk.Spinbox(page, textvariable=self.preview_var, from_=PREVIEW_RANGE[0], to=PREVIEW_RANGE[1],
                     increment=160, width=8).grid(row=2, column=1, sticky="w", padx=(12, 0), pady=(14, 4))
-        # preview cache folder: empty = cache/ next to the program, else the folder typed or picked here
+        # cache folder (preview pictures and error.log): empty = the user data folder, else the folder typed or picked here
+        userdata_cache = preview.default_root
         ttk.Label(page, text=t("field.cache_dir")).grid(row=3, column=0, sticky="w", pady=(14, 4))
         self.cache_var = tk.StringVar(value=cfg["cache_dir"])
         ttk.Entry(page, textvariable=self.cache_var, width=40).grid(row=3, column=1, sticky="we", padx=(12, 4),
                                                                     pady=(14, 4))
         ttk.Button(page, text=t("btn.pick"), command=self._pick_cache).grid(row=3, column=2, pady=(14, 4))
+        ttk.Button(page, text=t("btn.open"), command=lambda: self._open_folder(self.cache_var, userdata_cache)).grid(
+            row=3, column=3, padx=(4, 0), pady=(14, 4))
         ttk.Label(page, text=t("hint.cache_dir"), wraplength=420, justify="left").grid(
             row=4, column=1, columnspan=2, sticky="w", padx=(12, 0))
+        # user data folder: empty = the folder of the user account (see engine/userdata.py)
+        ttk.Label(page, text=t("field.userdata_dir")).grid(row=5, column=0, sticky="w", pady=(14, 4))
+        self.userdata_var = tk.StringVar(value=userdata.custom_dir())      # "" = the default folder of the OS
+        ttk.Entry(page, textvariable=self.userdata_var, width=40).grid(row=5, column=1, sticky="we", padx=(12, 4),
+                                                                       pady=(14, 4))
+        ttk.Button(page, text=t("btn.pick"), command=self._pick_userdata_dir).grid(row=5, column=2, pady=(14, 4))
+        ttk.Button(page, text=t("btn.open"), command=lambda: self._open_folder(self.userdata_var, userdata.userdata_dir)
+                   ).grid(row=5, column=3, padx=(4, 0), pady=(14, 4))
+        ttk.Label(page, text=t("hint.userdata_dir"), wraplength=420, justify="left").grid(
+            row=6, column=1, columnspan=2, sticky="w", padx=(12, 0))
+        self.override_var = tk.BooleanVar(value=cfg["effect_override"])
+        ttk.Checkbutton(page, text=t("check.effect_override"), variable=self.override_var).grid(
+            row=7, column=1, columnspan=2, sticky="w", padx=(12, 0), pady=(14, 0))
 
     def _tab_output(self, cfg):
         """
@@ -135,6 +151,9 @@ class SettingsDialog(Dialog):
         self.out_dir_var = tk.StringVar(value=cfg["output_dir"])
         ttk.Entry(page, textvariable=self.out_dir_var, width=40).grid(row=0, column=1, sticky="we", padx=(12, 4))
         ttk.Button(page, text=t("btn.pick"), command=self._pick_output).grid(row=0, column=2)
+        ttk.Button(page, text=t("btn.open"), command=lambda: self._open_folder(
+            self.out_dir_var, lambda: self.app.cfg["last_dir"] or os.path.expanduser("~"))).grid(
+            row=0, column=3, padx=(4, 0))
         ttk.Label(page, text=t("hint.output_dir"), wraplength=420, justify="left").grid(
             row=1, column=1, columnspan=2, sticky="w", padx=(12, 0))
         ttk.Label(page, text=t("field.name_format")).grid(row=2, column=0, sticky="w", pady=(14, 4))
@@ -204,6 +223,30 @@ class SettingsDialog(Dialog):
         if path:
             self.ffmpeg_var.set(path)
 
+    def _open_folder(self, var, fallback):
+        """
+        Show a folder in the file manager; it is made first if it does not exist yet. A failure is shown.
+
+        @param var       the entry of the row; its text is the folder, expanded (~) and made absolute
+        @param fallback  function returning the folder to show when the entry is empty
+        """
+        text = var.get().strip()
+        folder = os.path.abspath(os.path.expanduser(text)) if text else fallback()
+        try:
+            os.makedirs(folder, exist_ok=True)
+        except OSError as exc:
+            messagebox.showerror(t("dlg.error"), t("msg.open_failed", error=exc), parent=self)
+            return
+        if not open_path(folder):
+            messagebox.showerror(t("dlg.error"), t("msg.open_failed", error=folder), parent=self)
+
+    def _pick_userdata_dir(self):
+        """Let the user pick the folder that holds config.json, preset/, effect/, cache/ and error.log."""
+        path = filedialog.askdirectory(parent=self, title=t("dlg.pick_userdata"),
+                                       initialdir=self.userdata_var.get().strip() or userdata.userdata_dir())
+        if path:
+            self.userdata_var.set(path)
+
     def _pick_cache(self):
         """Choose the cache folder in a folder dialog (starts at the folder typed in the field, if any)."""
         path = filedialog.askdirectory(parent=self, title=t("dlg.pick_cache"),
@@ -260,7 +303,7 @@ class SettingsDialog(Dialog):
     def _ok(self):
         """Copy everything into the config, save, apply what works at once, close."""
         app, cfg = self.app, self.app.cfg
-        old = (cfg["language"], cfg["theme"], cfg["ffmpeg"], cfg["cache_dir"])
+        old = (cfg["language"], cfg["theme"], cfg["ffmpeg"], cfg["cache_dir"], cfg["effect_override"])
         cfg["ffmpeg"] = self.ffmpeg_var.get().strip()
         cache = self.cache_var.get().strip()
         cfg["cache_dir"] = os.path.abspath(os.path.expanduser(cache)) if cache else ""    # empty = default folder
@@ -273,11 +316,24 @@ class SettingsDialog(Dialog):
         cfg["worker_threads"] = _int(self.threads_var.get(), *THREADS_RANGE, cfg["worker_threads"])
         cfg["language"] = resolve_language(self._picked(self.lang_box, self.langs, cfg["language"]))
         cfg["theme"] = resolve_theme(self._picked(self.theme_box, self.themes, cfg["theme"]))
-        app.save_config()
-        app.apply_settings(ffmpeg_changed=old[2] != cfg["ffmpeg"], cache_changed=old[3] != cfg["cache_dir"])
+        cfg["effect_override"] = bool(self.override_var.get())
+        chosen = self.userdata_var.get().strip()
+        chosen = os.path.abspath(os.path.expanduser(chosen)) if chosen else ""
+        moved = chosen != userdata.custom_dir()
+        if moved:
+            try:
+                userdata.set_userdata_dir(chosen)       # userdata.json in the default folder; the config follows below
+            except OSError as exc:
+                messagebox.showerror(t("dlg.error"), t("msg.save_failed", error=exc), parent=self)
+                return
+        app.save_config()                               # written into the user data folder that is in use now
+        app.apply_settings(ffmpeg_changed=old[2] != cfg["ffmpeg"],
+                           cache_changed=moved or old[3] != cfg["cache_dir"])
         self.destroy()
         if old[:2] != (cfg["language"], cfg["theme"]):
             app.offer_restart()
+        elif moved or old[4] != cfg["effect_override"]:
+            app.offer_restart("msg.restart_effects")   # effect/ of the user data folder is read at start
 
 
 class ProjectDialog(Dialog):

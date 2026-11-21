@@ -275,7 +275,7 @@
   "menu.recent_clear": "Clear list",
   "msg.recent_missing": "{name} does not exist any more. It was removed from the recent list.",
   "field.cache_dir": "Cache folder",
-  "hint.cache_dir": "Temp cache folder. Leave empty to use app root.",
+  "hint.cache_dir": "Temp cache folder. Leave empty to use the user data folder.",
   "dlg.pick_cache": "Select cache folder",
   "about.cache": "Cache folder",
   "menu.language": "Language",
@@ -468,5 +468,13 @@
   "exists.ask": "Ask before replacing it",
   "exists.replace": "Replace it",
   "exists.number": "Keep both: add a number to the new name",
-  "msg.output_is_input": "{name} is used in the project and cannot be replaced by the export. Choose another name."
+  "msg.output_is_input": "{name} is used in the project and cannot be replaced by the export. Choose another name.",
+  "about.userdata": "User data folder",
+  "field.userdata_dir": "User data folder",
+  "hint.userdata_dir": "Leave empty to use the user folder of the OS.",
+  "dlg.pick_userdata": "Select user data folder",
+  "btn.open": "Open",
+  "msg.open_failed": "Could not open the folder:\n{error}",
+  "check.effect_override": "Let my effects replace built-in effects with the same id",
+  "msg.restart_effects": "Saved. The effects of the user data folder are loaded after a restart. Restart now?"
 }

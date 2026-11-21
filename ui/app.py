@@ -8,6 +8,7 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
+import traceback
 from tkinter import filedialog, messagebox, ttk
 
 from lang import list_languages, resolve_language, set_language, t
@@ -22,11 +23,12 @@ from engine.compiler import CompileError
 from engine.config import push_recent, save_config
 from engine.jobs import JobQueue, JobState
 from engine.preview import PreviewEngine, save_frame
+from engine.preview import cache_root as preview_cache_root
 from engine.project import (PROJECT_EXT, AdjustmentLayer, EffectInstance, History, MediaLayer, Project, ProjectError,
                             even, load_project, save_project)
 from engine.selection import EffectSelection, move_block
 from ui.common import (IS_MAC, IS_WIN, MOD, MOD_LABEL, Tip, Toast, clipboard_text, fmt_frame_name, fmt_time,
-                       set_clipboard)
+                       set_clipboard, set_log_folder, write_error_log)
 from ui.crop_assist import CropAssist
 from ui.dialogs import AboutDialog, GotoDialog, ProjectDialog, SettingsDialog
 from ui.export import ExportDialog
@@ -60,6 +62,7 @@ class App:
         self.cfg = cfg
         self.dnd_ok = False
         self.root = self._make_root()
+        self.root.report_callback_exception = self._callback_error
         cfg["language"] = set_language(cfg.get("language"))
         cfg["theme"] = set_theme(cfg.get("theme"))
         apply_theme(self.root)                      # before any widget exists
@@ -338,6 +341,7 @@ class App:
         @param ffmpeg_changed  True if the FFmpeg location was changed (it is searched again)
         @param cache_changed   True if the cache folder was changed (the preview cache moves there)
         """
+        set_log_folder(preview_cache_root(self.cfg["cache_dir"]))      # error.log follows the cache folder
         if cache_changed:
             self.engine.set_cache_dir(self.cfg["cache_dir"])
         if ffmpeg_changed:
@@ -373,9 +377,23 @@ class App:
         self.root.destroy()
         return True
 
-    def offer_restart(self):
-        """The language or theme was saved and is used from the next start: ask whether to restart now."""
-        if messagebox.askyesno(t("dlg.restart"), t("msg.restart"), parent=self.root):
+    def _callback_error(self, kind, value, tb):
+        """
+        A bug in a Tk callback: write it to error.log instead of failing silently (there is no console).
+
+        @param kind   exception class
+        @param value  exception
+        @param tb     traceback
+        """
+        write_error_log("".join(traceback.format_exception(kind, value, tb)))
+
+    def offer_restart(self, key="msg.restart"):
+        """
+        The language, the theme or the effects were saved and are used from the next start: ask whether to restart now.
+
+        @param key  language key of the question
+        """
+        if messagebox.askyesno(t("dlg.restart"), t(key), parent=self.root):
             self.restart()
 
     def restart(self):
