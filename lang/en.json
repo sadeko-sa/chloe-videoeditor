@@ -476,5 +476,7 @@
   "btn.open": "Open",
   "msg.open_failed": "Could not open the folder:\n{error}",
   "check.effect_override": "Let my effects replace built-in effects with the same id",
-  "msg.restart_effects": "Saved. The effects of the user data folder are loaded after a restart. Restart now?"
+  "msg.restart_effects": "Saved. The effects of the user data folder are loaded after a restart. Restart now?",
+  "effect.highlights_legacy": "Highlights (legacy)",
+  "effect.highlights_legacy.amount": "Amount"
 }

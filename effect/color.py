@@ -285,6 +285,30 @@ class Highlights(ChainEffect):
 
 
 @register
+class HighlightsLegacy(ChainEffect):
+    """
+    Highlights (legacy): the highlights effect of the older versions. Per pixel: k = amount / 100 * max(r, g, b);
+    out = 1 - (1 - k * c) * (1 - c) for every channel c. Black and white stay and bright pixels move the most, but
+    the darker channels of a pixel move more than with Highlights, so bright colors also lose some saturation.
+    """
+
+    id = "highlights_legacy"
+    name = "Highlights (legacy)"
+    params = (_percent(),)
+
+    def filters(self, v, ctx):
+        """
+        @param v    checked values (amount)
+        @param ctx  picture the filters run on
+        @return     gbrp conversion and one geq filter, [] when the amount is 0
+        """
+        if not v["amount"]:
+            return []
+        k = "(%s*%s)" % (num(v["amount"] / 100, 5), _MAX_OF)
+        return _geq(lambda c: "1-(1-%s*%s)*(1-%s)" % (k, _ch(c), _ch(c)))
+
+
+@register
 class BlackLevel(ChainEffect):
     """Black level: positive lifts the darkest pixels (screen blend), negative crushes them."""
 
