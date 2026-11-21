@@ -165,6 +165,7 @@
   "effect.contrast.amount": "量",
   "effect.shadows.amount": "量",
   "effect.highlights.amount": "量",
+  "effect.highlights.color": "色",
   "effect.saturation.amount": "量",
   "effect.vibrance.amount": "量",
   "effect.sharpen.amount": "量",
@@ -476,7 +477,5 @@
   "btn.open": "開く",
   "msg.open_failed": "フォルダを開けませんでした:\n{error}",
   "check.effect_override": "同じIDの内蔵エフェクトを自分のエフェクトで置き換える",
-  "msg.restart_effects": "保存しました。ユーザーデータフォルダのエフェクトは再起動後に読み込まれます。今すぐ再起動しますか?",
-  "effect.highlights_legacy": "ハイライト（旧）",
-  "effect.highlights_legacy.amount": "量"
+  "msg.restart_effects": "保存しました。ユーザーデータフォルダのエフェクトは再起動後に読み込まれます。今すぐ再起動しますか?"
 }

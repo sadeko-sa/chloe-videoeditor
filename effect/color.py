@@ -266,46 +266,31 @@ class Highlights(ChainEffect):
     m' = 1 - (1 - a * m * m) * (1 - m) with a = amount / 50 (slider -100..100, so a is -2..2), and all three channels are scaled by the
     same gain m' / m = 1 + a * m * (1 - m). Black and white stay, bright pixels move the most, and hue
     and saturation are kept (a pure gain never changes the ratios between the channels).
+
+    Color (0..100, t = color / 100) blends towards the highlights of the older versions, where every channel c has
+    its own gain 1 + a * m * ((1 - t) * (1 - m) + t * (1 - c) / 2): the darker channels of a pixel move more, so bright
+    colors lose some saturation. 0 is the look above, 100 is exactly the old look with the same amount.
     """
 
     id = "highlights"
     name = "Highlights"
-    params = (_percent(),)
+    params = (_percent(), Param("color", "Color", "float", 0, 0, 100, 1))
 
     def filters(self, v, ctx):
         """
-        @param v    checked values (amount)
+        @param v    checked values (amount, color)
         @param ctx  picture the filters run on
         @return     gbrp conversion and one geq filter, [] when the amount is 0
         """
         if not v["amount"]:
             return []
-        gain = "(1+%s*%s*(1-%s))" % (num(v["amount"] / 50, 5), _MAX_OF, _MAX_OF)
-        return _geq(lambda c: "%s*%s" % (_ch(c), gain))
-
-
-@register
-class HighlightsLegacy(ChainEffect):
-    """
-    Highlights (legacy): the highlights effect of the older versions. Per pixel: k = amount / 100 * max(r, g, b);
-    out = 1 - (1 - k * c) * (1 - c) for every channel c. Black and white stay and bright pixels move the most, but
-    the darker channels of a pixel move more than with Highlights, so bright colors also lose some saturation.
-    """
-
-    id = "highlights_legacy"
-    name = "Highlights (legacy)"
-    params = (_percent(),)
-
-    def filters(self, v, ctx):
-        """
-        @param v    checked values (amount)
-        @param ctx  picture the filters run on
-        @return     gbrp conversion and one geq filter, [] when the amount is 0
-        """
-        if not v["amount"]:
-            return []
-        k = "(%s*%s)" % (num(v["amount"] / 100, 5), _MAX_OF)
-        return _geq(lambda c: "1-(1-%s*%s)*(1-%s)" % (k, _ch(c), _ch(c)))
+        a = num(v["amount"] / 50, 5)
+        t = v["color"] / 100
+        if not t:
+            gain = "(1+%s*%s*(1-%s))" % (a, _MAX_OF, _MAX_OF)
+            return _geq(lambda c: "%s*%s" % (_ch(c), gain))
+        keep, wash = num(1 - t, 5), num(t / 2, 5)
+        return _geq(lambda c: "%s*(1+%s*%s*(%s*(1-%s)+%s*(1-%s)))" % (_ch(c), a, _MAX_OF, keep, _MAX_OF, wash, _ch(c)))
 
 
 @register

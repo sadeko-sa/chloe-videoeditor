@@ -165,6 +165,7 @@
   "effect.contrast.amount": "Amount",
   "effect.shadows.amount": "Amount",
   "effect.highlights.amount": "Amount",
+  "effect.highlights.color": "Color",
   "effect.saturation.amount": "Amount",
   "effect.vibrance.amount": "Amount",
   "effect.sharpen.amount": "Amount",
@@ -476,7 +477,5 @@
   "btn.open": "Open",
   "msg.open_failed": "Could not open the folder:\n{error}",
   "check.effect_override": "Let my effects replace built-in effects with the same id",
-  "msg.restart_effects": "Saved. The effects of the user data folder are loaded after a restart. Restart now?",
-  "effect.highlights_legacy": "Highlights (legacy)",
-  "effect.highlights_legacy.amount": "Amount"
+  "msg.restart_effects": "Saved. The effects of the user data folder are loaded after a restart. Restart now?"
 }
