@@ -352,7 +352,7 @@ class TextReporter(Reporter):
     """
     Messages on stderr. On a terminal one line is redrawn in place:
 
-        Encoding  42%  1.8x  elapsed 0:12  ETA 0:17
+        Encoding progress  42%  1.8x  elapsed 0:12  ETA 0:17
 
     to a pipe or file it is one line at every `step` percent (default 10), so logs stay short. quiet = errors only. Results that are the
     point of the call (commands, presets) go to stdout.
@@ -387,7 +387,7 @@ class TextReporter(Reporter):
         if step == self._shown and not self._tty:
             return
         self._shown = step
-        parts = ["Encoding %5.1f%%" % percent if self._step < 1 and not self._tty else "Encoding %3d%%" % percent]
+        parts = ["Encoding progress %5.1f%%" % percent if self._step < 1 and not self._tty else "Encoding progress %3d%%" % percent]
         if stats["speed"] is not None:
             parts.append("%.2fx" % stats["speed"])
         parts.append("elapsed " + _clock_text(stats["elapsed"]))
